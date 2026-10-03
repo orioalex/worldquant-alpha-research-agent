@@ -16,6 +16,7 @@ Process:
 
 Results:
   h, history     Show top alpha history (default: 10)
+  n, recent      Show most recently evaluated alpha (default: 10)
   q, quality     Show quality-ready alpha (default: 10)
   p, pending     Show submit-ready alpha (default: 10)
   u, submitted   Show submission history
@@ -113,6 +114,9 @@ case "${1:-help}" in
     ;;
   h|history)
     python3 view_alpha_history.py --limit "$(limit_arg "${2:-10}")"
+    ;;
+  n|recent)
+    python3 view_alpha_history.py --latest --limit "$(limit_arg "${2:-10}")"
     ;;
   q|quality)
     python3 view_alpha_history.py --only-quality-ready --limit "$(limit_arg "${2:-10}")"

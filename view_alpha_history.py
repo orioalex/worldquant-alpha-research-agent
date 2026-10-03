@@ -62,7 +62,9 @@ def failed_checks(record: dict[str, Any]) -> str:
     return "; ".join(parts) or "none"
 
 
-def sort_records(records: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
+def sort_records(records: Iterable[dict[str, Any]], *, latest: bool = False) -> list[dict[str, Any]]:
+    if latest:
+        return sorted(records, key=lambda item: str(item.get("evaluated_at") or ""), reverse=True)
     return sorted(
         records,
         key=lambda item: float(item.get("score")) if item.get("score") is not None else float("-inf"),
@@ -118,6 +120,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--limit", type=int, default=10, help="Maximum records to print (default: 10)")
     parser.add_argument("--only-quality-ready", action="store_true")
     parser.add_argument("--only-submit-ready", action="store_true")
+    parser.add_argument("--latest", action="store_true", help="Sort by evaluation time, newest first")
     return parser.parse_args()
 
 
@@ -141,11 +144,11 @@ def main() -> int:
     elif args.only_quality_ready:
         records = [item for item in records if item.get("quality_checks_ready") is True]
 
-    records = sort_records(records)[: args.limit]
+    records = sort_records(records, latest=args.latest)[: args.limit]
     print(f"Alpha history: {len(records)} record(s) shown")
     if invalid:
         print(f"Warning: skipped {invalid} invalid JSON line(s)")
-    print("Sorted by score, highest first.\n")
+    print(("Sorted by evaluation time, newest first." if args.latest else "Sorted by score, highest first.") + "\n")
 
     if not records:
         print("No matching alpha records.")
