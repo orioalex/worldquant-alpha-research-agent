@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+cd "$APP_DIR"
+
+usage() {
+  cat <<'EOF'
+Usage: ./wqagent COMMAND [LIMIT]
+
+Process:
+  s, start       Start the alpha agent
+  d, stop        Stop the alpha agent
+  r, restart     Stop and start the alpha agent
+  t, status      Show process and latest run status
+
+Results:
+  h, history     Show top alpha history (default: 10)
+  q, quality     Show quality-ready alpha (default: 10)
+  p, pending     Show submit-ready alpha (default: 10)
+  u, submitted   Show submission history
+  e, events      Show latest planner events
+  l, log         Follow the agent log
+
+Other:
+  help           Show this help
+EOF
+}
+
+limit_arg() {
+  local value="${1:-10}"
+  if [[ ! "$value" =~ ^[0-9]+$ ]] || (( value < 1 )); then
+    echo "LIMIT must be a positive integer." >&2
+    exit 2
+  fi
+  printf '%s' "$value"
+}
+
+latest_report() {
+  find .alpha_agent/agent_runs -maxdepth 1 -type f -name '*.json' -printf '%T@ %p\n' 2>/dev/null \
+    | sort -nr | head -n 1 | cut -d' ' -f2-
+}
+
+show_summary() {
+  local report
+  report="$(latest_report || true)"
+  if [[ -z "$report" ]]; then
+    echo "No completed agent report found."
+    return 0
+  fi
+  python3 - "$report" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+summary = report.get("summary", {})
+state = summary.get("state", {})
+for key, label in (
+    ("run_id", "run"),
+    ("started_at", "started"),
+    ("finished_at", "finished"),
+    ("submission_mode", "submission mode"),
+    ("final_stage", "final stage"),
+    ("stop_reason", "stop reason"),
+    ("best_alpha_id", "best alpha"),
+    ("best_score", "best score"),
+    ("evaluated_this_run", "evaluated this run"),
+    ("quality_ready_count", "quality-ready"),
+    ("submittable_count", "submit-ready"),
+    ("submission_attempts_this_run", "submission attempts"),
+):
+    value = summary.get(key, state.get(key, "-"))
+    print(f"{label:22} {value}")
+PY
+}
+
+case "${1:-help}" in
+  s|start)
+    ./start_alpha_agent.sh
+    ;;
+  d|stop)
+    ./stop_alpha_agent.sh
+    ;;
+  r|restart)
+    ./stop_alpha_agent.sh || true
+    ./start_alpha_agent.sh
+    ;;
+  t|status)
+    ./status_alpha_agent.sh
+    echo
+    echo "Latest run summary"
+    show_summary
+    ;;
+  h|history)
+    python3 view_alpha_history.py --limit "$(limit_arg "${2:-10}")"
+    ;;
+  q|quality)
+    python3 view_alpha_history.py --only-quality-ready --limit "$(limit_arg "${2:-10}")"
+    ;;
+  p|pending|submit-ready)
+    python3 view_alpha_history.py --only-submit-ready --limit "$(limit_arg "${2:-10}")"
+    ;;
+  u|submitted)
+    python3 - <<'PY'
+import json
+from pathlib import Path
+
+path = Path(".alpha_agent/submissions.jsonl")
+if not path.exists():
+    print("No submission history found.")
+else:
+    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    if not rows:
+        print("No submissions recorded.")
+    for index, row in enumerate(rows, 1):
+        print(f"[{index}] alpha={row.get('alpha_id', '-')} result={row.get('result', '-')} submitted={row.get('submitted_at', '-')}")
+PY
+    ;;
+  e|events)
+    report="$(latest_report || true)"
+    if [[ -z "$report" ]]; then
+      echo "No completed agent report found."
+    else
+      python3 - "$report" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+events = report.get("events", [])
+for event in events[-10:]:
+    details = event.get("details", {})
+    print(
+        f"iteration={event.get('iteration', '-')} "
+        f"stage={event.get('stage', '-')} "
+        f"action={event.get('action', '-')} "
+        f"result={details.get('result', '-')} "
+        f"alpha={details.get('alpha_id') or details.get('best_alpha_after') or '-'}"
+    )
+PY
+    fi
+    ;;
+  l|log)
+    tail -f alpha-agent.log
+    ;;
+  help|-h|--help)
+    usage
+    ;;
+  *)
+    echo "Unknown command: $1" >&2
+    usage >&2
+    exit 2
+    ;;
+esac

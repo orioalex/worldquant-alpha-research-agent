@@ -10,9 +10,11 @@ htmlcov/
 .env
 .env.local
 .env.*.local
+.env~
 .streamlit/secrets.toml
 .venv/
 venv/
+*.pid
 
 .alpha_pipeline/
 .alpha_pipeline_v2/

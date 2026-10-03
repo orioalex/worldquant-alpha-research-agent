@@ -117,6 +117,101 @@ Install dependencies:
 pip install -r requirements.txt
 ```
 
+## Linux Deployment
+
+The repository includes a small Linux process wrapper, `wqagent`, for the common remote workflow. It keeps credentials and research results on the machine and does not require a system-wide installation.
+
+### 1. Clone and install
+
+```bash
+git clone https://github.com/zeron-G/worldquant-alpha-research-agent.git
+cd worldquant-alpha-research-agent
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+Python 3.10 or newer is required. GPU acceleration is optional for this repository; the WQ simulation and check requests are sent to the WorldQuant BRAIN API.
+
+### 2. Configure credentials
+
+```bash
+cp .env.example .env
+chmod 600 .env
+${EDITOR:-vi} .env
+```
+
+Use either `WQB_EMAIL` plus `WQB_PASSWORD`, or a current `WQB_COOKIE_HEADER`. A cookie header is a live credential: never commit it, paste it into an issue, or place it in a public log.
+
+For the deterministic planner:
+
+```dotenv
+ALPHA_AGENT_PLANNER_PROVIDER=heuristic
+```
+
+For an OpenAI-compatible planner:
+
+```dotenv
+ALPHA_AGENT_PLANNER_PROVIDER=openai
+ALPHA_AGENT_PLANNER_MODEL=your-model-id
+ALPHA_AGENT_PLANNER_BASE_URL=https://your-provider.example/v1
+ALPHA_AGENT_PLANNER_API_KEY_ENV=OPENAI_API_KEY
+OPENAI_API_KEY=your-api-key
+```
+
+The model provider must support `POST /chat/completions` and JSON response format. The planner is optional; if it is unavailable, the agent falls back to the deterministic heuristic planner.
+
+Keep submission disabled while testing:
+
+```dotenv
+ALPHA_AGENT_SUBMISSION_MODE=disabled
+```
+
+Only change it to `manual` or `auto_approved` after checking the generated expressions and WQ readiness results. `auto_approved` submits only after the agent reaches harvest and finds a candidate that passes all blocking quality and correlation checks.
+
+### 3. Run the Linux wrapper
+
+```bash
+chmod u+x wqagent start_alpha_agent.sh stop_alpha_agent.sh status_alpha_agent.sh
+
+./wqagent s       # start
+./wqagent t       # status and latest report summary
+./wqagent h       # readable alpha history
+./wqagent h 20    # show the top 20 records
+./wqagent q       # quality-ready records
+./wqagent p       # submit-ready records
+./wqagent u       # submission history
+./wqagent e       # latest planner events
+./wqagent d       # stop
+./wqagent r       # restart
+```
+
+`./wqagent l` follows the process log and can be stopped with `Ctrl-C`. The start wrapper loads `.env` before expanding the command-line defaults, so `ALPHA_AGENT_SUBMISSION_MODE` and the other runtime settings are honored.
+
+The wrappers use their own directory as the application directory. Set `ALPHA_AGENT_APP_DIR` only when the checkout and runtime files are intentionally separated.
+
+### 4. Inspect generated artifacts
+
+The default work directory is `.alpha_agent`:
+
+```text
+.alpha_agent/results.jsonl       # every evaluated alpha and its metrics/checks
+.alpha_agent/state.json          # latest aggregate state
+.alpha_agent/agent_runs/*.json   # complete per-run reports and planner events
+.alpha_agent/submissions.jsonl   # successful submission records
+```
+
+The work directory is ignored by Git. Keep it if you want to retain history; changing `ALPHA_AGENT_WORKDIR` starts a separate result history.
+
+### 5. Optional Streamlit console
+
+```bash
+python -m streamlit run streamlit_app.py
+```
+
+The console is intended for interactive local use. For a headless Linux machine, the `wqagent` wrapper and JSONL artifacts are usually simpler.
+
 ## Environment Variables
 
 Copy from `.env.example` and set locally (never commit secrets):
