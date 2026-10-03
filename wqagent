@@ -75,6 +75,23 @@ for key, label in (
 PY
 }
 
+show_process() {
+  local pid_file="$APP_DIR/alpha-agent.pid"
+  if [[ ! -f "$pid_file" ]]; then
+    echo "Current agent: stopped"
+    return 0
+  fi
+
+  local pid
+  pid="$(cat "$pid_file")"
+  if kill -0 "$pid" 2>/dev/null; then
+    echo "Current agent: running pid=$pid"
+    ps -o pid,lstart,etime,stat,cmd -p "$pid"
+  else
+    echo "Current agent: stopped (stale pid file: $pid)"
+  fi
+}
+
 case "${1:-help}" in
   s|start)
     ./start_alpha_agent.sh
@@ -89,7 +106,9 @@ case "${1:-help}" in
   t|status)
     ./status_alpha_agent.sh
     echo
-    echo "Latest run summary"
+    show_process
+    echo
+    echo "Latest completed run summary"
     show_summary
     ;;
   h|history)
