@@ -720,7 +720,11 @@ class AlphaResearchAgent:
                 stage=stage,
                 action="submit_best",
                 rationale=decision.rationale,
-                details={"result": "ok", "alpha_id": submission.get("alpha_id")},
+                details={
+                    "result": submission.get("result", "ok"),
+                    "alpha_id": submission.get("alpha_id"),
+                    "message": (submission.get("response") or {}).get("message"),
+                },
                 hypothesis=decision.hypothesis,
                 risk_note=decision.risk_note,
             )

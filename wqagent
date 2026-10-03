@@ -134,7 +134,7 @@ else:
         print("No submissions recorded.")
     for index, row in enumerate(rows, 1):
         response = row.get("response") or {}
-        if row.get("result") == "error" and isinstance(response, dict):
+        if row.get("result") in {"error", "blocked"} and isinstance(response, dict):
             detail = f" status={response.get('status', '-')} message={response.get('message', 'Unknown error')}"
         else:
             detail = ""

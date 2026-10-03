@@ -1271,6 +1271,34 @@ def attempt_submit_record(
     alpha_id = str(record["alpha_id"])
     submitted_at = iso_now()
     try:
+        # Recheck immediately before submit because production correlation can
+        # change after the original simulation result was stored.
+        fresh_checks = client.check_alpha(alpha_id, max_wait=max_wait, poll_interval=poll_interval)
+        fresh_summary = summarize_checks(fresh_checks)
+        fresh_failed = failed_submission_checks(fresh_checks)
+        fresh_pending = pending_checks(fresh_checks)
+        if fresh_failed or (fresh_pending and not allow_pending_checks):
+            reasons = list(fresh_failed)
+            if fresh_pending and not allow_pending_checks:
+                reasons.extend(f"PENDING:{name}" for name in fresh_pending)
+            submission = {
+                "alpha_id": alpha_id,
+                "candidate_key": record.get("candidate_key"),
+                "submitted_at": submitted_at,
+                "result": "blocked",
+                "response": {
+                    "message": "Fresh pre-submit checks blocked submission: " + ", ".join(reasons),
+                    "status": None,
+                    "url": f"/alphas/{alpha_id}/check",
+                    "payload": {
+                        "summary": fresh_summary,
+                        "checks": fresh_checks,
+                    },
+                },
+            }
+            submissions_store.append(submission)
+            return submission
+
         response = client.submit_alpha(alpha_id, max_wait=max_wait, poll_interval=poll_interval)
         submission = {
             "alpha_id": alpha_id,
