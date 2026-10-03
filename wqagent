@@ -133,7 +133,15 @@ else:
     if not rows:
         print("No submissions recorded.")
     for index, row in enumerate(rows, 1):
-        print(f"[{index}] alpha={row.get('alpha_id', '-')} result={row.get('result', '-')} submitted={row.get('submitted_at', '-')}")
+        response = row.get("response") or {}
+        if row.get("result") == "error" and isinstance(response, dict):
+            detail = f" status={response.get('status', '-')} message={response.get('message', 'Unknown error')}"
+        else:
+            detail = ""
+        print(
+            f"[{index}] alpha={row.get('alpha_id', '-')} "
+            f"result={row.get('result', '-')} submitted={row.get('submitted_at', '-')}{detail}"
+        )
 PY
     ;;
   e|events)

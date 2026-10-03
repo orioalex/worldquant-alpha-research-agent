@@ -291,6 +291,7 @@ class AlphaResearchAgent:
         self.progress_callback = progress_callback
         self.events: List[Dict[str, Any]] = []
         self.submission_attempts: List[Dict[str, Any]] = []
+        self.attempted_submission_ids: set[str] = set()
         self.seed_evaluated_count = 0
         self.notebook = ResearchNotebook(
             budget=max(1, int(runtime.agent.budget)),
@@ -651,6 +652,23 @@ class AlphaResearchAgent:
             )
             return None
 
+        alpha_id = str(candidate.get("alpha_id"))
+        if alpha_id in self.attempted_submission_ids:
+            self._append_event(
+                iteration=iteration,
+                stage=stage,
+                action="submit_best",
+                rationale=decision.rationale,
+                details={
+                    "result": "skipped",
+                    "reason": "Submission was already attempted for this alpha in the current run.",
+                    "alpha_id": alpha_id,
+                },
+                hypothesis=decision.hypothesis,
+                risk_note=decision.risk_note,
+            )
+            return None
+
         if mode == "disabled":
             self._append_event(
                 iteration=iteration,
@@ -687,6 +705,7 @@ class AlphaResearchAgent:
             return None
 
         try:
+            self.attempted_submission_ids.add(alpha_id)
             submission = self.toolbox.submit_record(candidate)
             result = {
                 "alpha_id": submission.get("alpha_id"),
