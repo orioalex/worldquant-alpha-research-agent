@@ -245,6 +245,8 @@ class ResearchToolbox:
             alpha_id = record.get("alpha_id")
             if not isinstance(alpha_id, str):
                 continue
+            if alpha_id in self.submitted_alpha_ids:
+                continue
             if target_alpha_id and alpha_id != target_alpha_id:
                 continue
             if not pipeline.record_is_submit_ready(record, allow_pending_checks=allow_pending):
