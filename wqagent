@@ -4,6 +4,14 @@ set -euo pipefail
 APP_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 cd "$APP_DIR"
 
+if [[ -f "$APP_DIR/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$APP_DIR/.env"
+  set +a
+fi
+WORKDIR="${ALPHA_AGENT_WORKDIR:-.alpha_agent}"
+
 usage() {
   cat <<'EOF'
 Usage: ./wqagent COMMAND [LIMIT]
@@ -38,7 +46,7 @@ limit_arg() {
 }
 
 latest_report() {
-  find .alpha_agent/agent_runs -maxdepth 1 -type f -name '*.json' -printf '%T@ %p\n' 2>/dev/null \
+  find "$WORKDIR/agent_runs" -maxdepth 1 -type f -name '*.json' -printf '%T@ %p\n' 2>/dev/null \
     | sort -nr | head -n 1 | cut -d' ' -f2-
 }
 
@@ -113,23 +121,24 @@ case "${1:-help}" in
     show_summary
     ;;
   h|history)
-    python3 view_alpha_history.py --limit "$(limit_arg "${2:-10}")"
+    python3 view_alpha_history.py "$WORKDIR/results.jsonl" --limit "$(limit_arg "${2:-10}")"
     ;;
   n|recent)
-    python3 view_alpha_history.py --latest --limit "$(limit_arg "${2:-10}")"
+    python3 view_alpha_history.py "$WORKDIR/results.jsonl" --latest --limit "$(limit_arg "${2:-10}")"
     ;;
   q|quality)
-    python3 view_alpha_history.py --only-quality-ready --limit "$(limit_arg "${2:-10}")"
+    python3 view_alpha_history.py "$WORKDIR/results.jsonl" --only-quality-ready --limit "$(limit_arg "${2:-10}")"
     ;;
   p|pending|submit-ready)
-    python3 view_alpha_history.py --only-submit-ready --limit "$(limit_arg "${2:-10}")"
+    python3 view_alpha_history.py "$WORKDIR/results.jsonl" --only-submit-ready --limit "$(limit_arg "${2:-10}")"
     ;;
   u|submitted)
     python3 - <<'PY'
 import json
+import os
 from pathlib import Path
 
-path = Path(".alpha_agent/submissions.jsonl")
+path = Path(os.environ.get("ALPHA_AGENT_WORKDIR", ".alpha_agent")) / "submissions.jsonl"
 if not path.exists():
     print("No submission history found.")
 else:

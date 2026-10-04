@@ -40,6 +40,7 @@ class AgentConfig:
     random_seed: int = 7
     max_family_budget_share: float = 0.45
     min_expression_novelty: float = 0.10
+    force_diversify_on_correlation: bool = False
     retries: int = 2
     sleep_between: float = 1.0
     max_wait: float = DEFAULT_MAX_WAIT

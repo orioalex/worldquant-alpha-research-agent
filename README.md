@@ -170,6 +170,17 @@ ALPHA_AGENT_SUBMISSION_MODE=disabled
 
 Only change it to `manual` or `auto_approved` after checking the generated expressions and WQ readiness results. `auto_approved` submits only after the agent reaches harvest and finds a candidate that passes all blocking quality and correlation checks.
 
+If the search keeps refining candidates from a family that fails `PROD_CORRELATION` or `SELF_CORRELATION`, enable a hard family pivot for the next run:
+
+```dotenv
+ALPHA_AGENT_FORCE_DIVERSIFY_ON_CORRELATION=true
+ALPHA_AGENT_MAX_FAMILY_BUDGET_SHARE=0.15
+ALPHA_AGENT_MIN_EXPRESSION_NOVELTY=0.25
+ALPHA_AGENT_SUBMISSION_MODE=disabled
+```
+
+With this switch, correlation-blocked frontier families are excluded from local repair and the planner moves to other seed families. Use a new `ALPHA_AGENT_WORKDIR` when you want a completely fresh search history.
+
 ### 3. Run the Linux wrapper
 
 ```bash

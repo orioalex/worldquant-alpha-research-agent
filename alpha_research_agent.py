@@ -82,17 +82,17 @@ def add_auth_args(parser: argparse.ArgumentParser) -> None:
 def add_common_agent_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--idea-library",
-        default=str(pipeline.DEFAULT_IDEA_LIBRARY),
+        default=os.getenv("ALPHA_AGENT_IDEA_LIBRARY", str(pipeline.DEFAULT_IDEA_LIBRARY)),
         help="Path to idea library JSON.",
     )
     parser.add_argument(
         "--fields-summary",
-        default=str(pipeline.DEFAULT_FIELDS_SUMMARY),
+        default=os.getenv("ALPHA_AGENT_FIELDS_SUMMARY", str(pipeline.DEFAULT_FIELDS_SUMMARY)),
         help="Path to cached fields summary JSON.",
     )
     parser.add_argument(
         "--workdir",
-        default=str(DEFAULT_AGENT_WORKDIR),
+        default=os.getenv("ALPHA_AGENT_WORKDIR", str(DEFAULT_AGENT_WORKDIR)),
         help="Agent working directory for results/state/logs.",
     )
     parser.add_argument(
@@ -149,6 +149,13 @@ def add_run_args(parser: argparse.ArgumentParser) -> None:
         "--min-expression-novelty",
         type=float,
         default=float(os.getenv("ALPHA_AGENT_MIN_EXPRESSION_NOVELTY", "0.10")),
+    )
+    parser.add_argument(
+        "--force-diversify-on-correlation",
+        action="store_true",
+        default=os.getenv("ALPHA_AGENT_FORCE_DIVERSIFY_ON_CORRELATION", "false").lower()
+        in {"1", "true", "yes", "on"},
+        help="Skip local refinements and switch families when correlation checks block the frontier.",
     )
     parser.add_argument("--shuffle-seeds", action="store_true", default=True, help="Shuffle generated seeds.")
     parser.add_argument("--no-shuffle-seeds", action="store_false", dest="shuffle_seeds")
@@ -233,6 +240,7 @@ def build_runtime(args: argparse.Namespace, run_overrides: Optional[Dict[str, An
         family_filter=tuple(getattr(args, "family", []) or ()),
         max_family_budget_share=getattr(args, "max_family_budget_share", 0.45),
         min_expression_novelty=getattr(args, "min_expression_novelty", 0.10),
+        force_diversify_on_correlation=getattr(args, "force_diversify_on_correlation", False),
         shuffle_seeds=getattr(args, "shuffle_seeds", True),
         random_seed=getattr(args, "random_seed", 7),
         retries=getattr(args, "retries", 2),

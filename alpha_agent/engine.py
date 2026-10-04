@@ -169,7 +169,13 @@ class ResearchToolbox:
             family_filter=set(self.agent_cfg.family_filter),
             blocked_families=blocked_families,
         )
-        merged = dedupe_candidates(correlation_repairs + check_aware + generic)
+        correlation_blocked = bool(blocked_families) and any(
+            pipeline.should_pivot_away_from_record(record) for record in top_records
+        )
+        if self.agent_cfg.force_diversify_on_correlation and correlation_blocked:
+            merged = []
+        else:
+            merged = dedupe_candidates(correlation_repairs + check_aware + generic)
         fresh = [
             candidate
             for candidate in merged

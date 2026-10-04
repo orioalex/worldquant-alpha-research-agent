@@ -1655,6 +1655,7 @@ def sidebar_controls() -> tuple[AgentRuntimeConfig, bool, Dict[str, Any]]:
         random_seed = st.number_input("Random seed", min_value=0, max_value=100_000, value=env_int("ALPHA_AGENT_RANDOM_SEED", 7), step=1)
         max_family_budget_share = st.slider("Max family budget share", min_value=0.05, max_value=1.0, value=env_float("ALPHA_AGENT_MAX_FAMILY_BUDGET_SHARE", 0.45), step=0.01)
         min_expression_novelty = st.slider("Min expression novelty", min_value=0.0, max_value=1.0, value=env_float("ALPHA_AGENT_MIN_EXPRESSION_NOVELTY", 0.10), step=0.01)
+        force_diversify_on_correlation = st.toggle("Force new family on correlation failure", value=env_bool("ALPHA_AGENT_FORCE_DIVERSIFY_ON_CORRELATION", False))
 
         st.markdown("### Reliability")
         retries = st.number_input("Retries", min_value=0, max_value=20, value=env_int("ALPHA_AGENT_RETRIES", 2), step=1)
@@ -1711,6 +1712,7 @@ def sidebar_controls() -> tuple[AgentRuntimeConfig, bool, Dict[str, Any]]:
             random_seed=int(random_seed),
             max_family_budget_share=float(max_family_budget_share),
             min_expression_novelty=float(min_expression_novelty),
+            force_diversify_on_correlation=bool(force_diversify_on_correlation),
             retries=int(retries),
             sleep_between=float(sleep_between),
             max_wait=float(max_wait),
