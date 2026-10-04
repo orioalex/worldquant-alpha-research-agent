@@ -271,7 +271,8 @@ class OpenAIJsonPlanner:
             "2) In exploit, attack dominant failed checks with targeted mutations.\n"
             "3) In robustness, stress test top candidates over universe/neutralization/truncation changes.\n"
             "4) Submit only in harvest/robustness when governance allows.\n"
-            "5) Include one concise hypothesis that can be validated by the next batch.\n"
+            "5) Choose focus_family from available_families when selecting a research direction.\n"
+            "6) Include one concise hypothesis that can be validated by the next batch.\n"
             f"{json.dumps(context, ensure_ascii=False, sort_keys=True)}"
         )
         messages = [

@@ -162,6 +162,8 @@ OPENAI_API_KEY=your-api-key
 
 The model provider must support `POST /chat/completions` and JSON response format. The planner is optional; if it is unavailable, the agent falls back to the deterministic heuristic planner.
 
+When the OpenAI-compatible planner returns `focus_family`, the agent now applies it to the next candidate batch for seeds, refinements, diversification, and robustness. If that family has no available candidates, selection falls back to the normal ranked pool.
+
 Keep submission disabled while testing:
 
 ```dotenv
@@ -214,6 +216,8 @@ The default work directory is `.alpha_agent`:
 ```
 
 The work directory is ignored by Git. Keep it if you want to retain history; changing `ALPHA_AGENT_WORKDIR` starts a separate result history.
+
+By default, `./wqagent s` generates a new random seed on every actual start, so separate runs explore seed families in a different order. Set `ALPHA_AGENT_RENEW_SEED_ON_START=false` when you need reproducible ordering from `ALPHA_AGENT_RANDOM_SEED`.
 
 ### 5. Optional Streamlit console
 

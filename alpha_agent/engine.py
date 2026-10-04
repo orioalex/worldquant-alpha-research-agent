@@ -119,6 +119,8 @@ class ResearchToolbox:
             family_filter=set(self.agent_cfg.family_filter),
             available_fields=self.available_fields,
         )
+        if self.agent_cfg.force_diversify_on_correlation and pivot_families:
+            seeds = [candidate for candidate in seeds if candidate.family not in pivot_families]
         ordered = pipeline.prioritize_seed_candidates(
             seeds=seeds,
             blocked_families=pivot_families,
@@ -133,10 +135,21 @@ class ResearchToolbox:
         ]
         return len(self.seed_queue)
 
-    def pop_seed_candidates(self, count: int) -> List[pipeline.Candidate]:
+    def pop_seed_candidates(self, count: int, *, focus_family: Optional[str] = None) -> List[pipeline.Candidate]:
         count = max(0, int(count))
         if count == 0:
             return []
+        if focus_family:
+            focused = [candidate for candidate in self.seed_queue if candidate.family == focus_family]
+            if focused:
+                selected = focused[:count]
+                selected_signatures = {candidate.signature() for candidate in selected}
+                self.seed_queue = [
+                    candidate
+                    for candidate in self.seed_queue
+                    if candidate.signature() not in selected_signatures
+                ]
+                return selected
         batch = self.seed_queue[:count]
         self.seed_queue = self.seed_queue[count:]
         return batch
@@ -436,13 +449,17 @@ class AlphaResearchAgent:
 
             batch: List[pipeline.Candidate] = []
             if decision.action == "evaluate_seed":
-                raw_seed_batch = self.toolbox.pop_seed_candidates(max(decision.batch_size * 2, decision.batch_size))
+                raw_seed_batch = self.toolbox.pop_seed_candidates(
+                    max(decision.batch_size * 2, decision.batch_size),
+                    focus_family=decision.focus_family,
+                )
                 batch = self._select_batch(
                     candidates=raw_seed_batch,
                     batch_size=decision.batch_size,
                     stage=current_stage,
                     frontier=frontier,
                     blocked_families=blocked_families,
+                    focus_family=decision.focus_family,
                 )
             elif decision.action == "evaluate_refine":
                 batch = self._select_batch(
@@ -451,6 +468,7 @@ class AlphaResearchAgent:
                     stage=current_stage,
                     frontier=frontier,
                     blocked_families=blocked_families,
+                    focus_family=decision.focus_family,
                 )
             elif decision.action == "evaluate_diversify":
                 batch = self._select_batch(
@@ -459,6 +477,7 @@ class AlphaResearchAgent:
                     stage=current_stage,
                     frontier=frontier,
                     blocked_families=blocked_families,
+                    focus_family=decision.focus_family,
                 )
             elif decision.action == "evaluate_robustness":
                 batch = self._select_batch(
@@ -467,6 +486,7 @@ class AlphaResearchAgent:
                     stage="robustness",
                     frontier=frontier,
                     blocked_families=set(),
+                    focus_family=decision.focus_family,
                     enforce_family_cap=False,
                 )
 
@@ -766,12 +786,18 @@ class AlphaResearchAgent:
         stage: str,
         frontier: Sequence[Dict[str, Any]],
         blocked_families: set[str],
+        focus_family: Optional[str] = None,
         enforce_family_cap: bool = True,
     ) -> List[pipeline.Candidate]:
         if not candidates:
             return []
+        candidate_pool = list(candidates)
+        if focus_family:
+            focused = [candidate for candidate in candidate_pool if candidate.family == focus_family]
+            if focused:
+                candidate_pool = focused
         ranked = self.notebook.rank_candidates(
-            candidates=candidates,
+            candidates=candidate_pool,
             frontier_records=frontier,
             stage=stage,
             blocked_families=blocked_families,
@@ -846,6 +872,18 @@ class AlphaResearchAgent:
             "refine_candidates_available": len(refine_candidates),
             "diversification_candidates_available": len(diversify_candidates),
             "robustness_candidates_available": len(robustness_candidates),
+            "available_families": sorted(
+                {
+                    candidate.family
+                    for candidate in (
+                        list(self.toolbox.seed_queue)
+                        + list(refine_candidates)
+                        + list(diversify_candidates)
+                        + list(robustness_candidates)
+                    )
+                    if candidate.family
+                }
+            ),
             "leaderboard_count": len(frontier),
             "best_score": best.get("score"),
             "best_alpha_id": best.get("alpha_id"),
