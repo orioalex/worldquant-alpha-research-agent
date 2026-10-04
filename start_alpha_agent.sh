@@ -44,12 +44,20 @@ if [[ "$WORKDIR" == "." || "$WORKDIR" == "/" || "$WORKDIR" == "$APP_DIR" ]]; the
   printf 'Refusing to archive unsafe ALPHA_AGENT_WORKDIR=%s\n' "$WORKDIR" >&2
   exit 2
 fi
+archived_workdir=""
 if [[ "${ALPHA_AGENT_ARCHIVE_WORKDIR_ON_START:-true}" =~ ^(1|true|yes|on)$ ]] && [[ -e "$WORKDIR" ]]; then
   archive_path="${WORKDIR}.archive.$(date +%Y%m%d_%H%M%S)_$$"
   mv -- "$WORKDIR" "$archive_path"
+  archived_workdir="$archive_path"
   printf 'Archived previous workdir: %s\n' "$archive_path"
 fi
 mkdir -p -- "$WORKDIR"
+if [[ "${ALPHA_AGENT_PRESERVE_SUBMISSIONS_ON_START:-true}" =~ ^(1|true|yes|on)$ ]] \
+  && [[ -n "$archived_workdir" ]] \
+  && [[ -f "$archived_workdir/submissions.jsonl" ]]; then
+  cp -p -- "$archived_workdir/submissions.jsonl" "$WORKDIR/submissions.jsonl"
+  printf 'Preserved submission de-duplication history in: %s/submissions.jsonl\n' "$WORKDIR"
+fi
 nohup "$APP_DIR/.venv/bin/python" "$APP_DIR/alpha_research_agent.py" \
   --pretty run \
   --budget "${ALPHA_AGENT_BUDGET:-24}" \

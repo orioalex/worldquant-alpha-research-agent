@@ -219,7 +219,7 @@ The work directory is ignored by Git. Keep it if you want to retain history; cha
 
 By default, `./wqagent s` archives the previous work directory with a timestamp, creates a clean one, and generates a new random seed. This makes each start a fresh search. Set `ALPHA_AGENT_ARCHIVE_WORKDIR_ON_START=false` to continue the existing work directory. Set `ALPHA_AGENT_RENEW_SEED_ON_START=false` when you need reproducible ordering from `ALPHA_AGENT_RANDOM_SEED`.
 
-Archiving also resets the local submission de-duplication history. Keep submission disabled while using fresh work directories, or preserve a shared `submissions.jsonl` before enabling `auto_approved` to avoid repeated submissions.
+Archiving preserves `submissions.jsonl` by default, so the submission de-duplication history survives fresh workdirs. Set `ALPHA_AGENT_PRESERVE_SUBMISSIONS_ON_START=false` only when you intentionally want to reset that history.
 
 ### 5. Optional Streamlit console
 
