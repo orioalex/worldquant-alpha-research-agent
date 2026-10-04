@@ -217,7 +217,9 @@ The default work directory is `.alpha_agent`:
 
 The work directory is ignored by Git. Keep it if you want to retain history; changing `ALPHA_AGENT_WORKDIR` starts a separate result history.
 
-By default, `./wqagent s` generates a new random seed on every actual start, so separate runs explore seed families in a different order. Set `ALPHA_AGENT_RENEW_SEED_ON_START=false` when you need reproducible ordering from `ALPHA_AGENT_RANDOM_SEED`.
+By default, `./wqagent s` archives the previous work directory with a timestamp, creates a clean one, and generates a new random seed. This makes each start a fresh search. Set `ALPHA_AGENT_ARCHIVE_WORKDIR_ON_START=false` to continue the existing work directory. Set `ALPHA_AGENT_RENEW_SEED_ON_START=false` when you need reproducible ordering from `ALPHA_AGENT_RANDOM_SEED`.
+
+Archiving also resets the local submission de-duplication history. Keep submission disabled while using fresh work directories, or preserve a shared `submissions.jsonl` before enabling `auto_approved` to avoid repeated submissions.
 
 ### 5. Optional Streamlit console
 

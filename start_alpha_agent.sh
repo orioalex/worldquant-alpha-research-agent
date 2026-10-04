@@ -39,6 +39,17 @@ if [[ "${ALPHA_AGENT_RENEW_SEED_ON_START:-true}" =~ ^(1|true|yes|on)$ ]]; then
 fi
 
 cd "$APP_DIR"
+WORKDIR="${ALPHA_AGENT_WORKDIR:-.alpha_agent}"
+if [[ "$WORKDIR" == "." || "$WORKDIR" == "/" || "$WORKDIR" == "$APP_DIR" ]]; then
+  printf 'Refusing to archive unsafe ALPHA_AGENT_WORKDIR=%s\n' "$WORKDIR" >&2
+  exit 2
+fi
+if [[ "${ALPHA_AGENT_ARCHIVE_WORKDIR_ON_START:-true}" =~ ^(1|true|yes|on)$ ]] && [[ -e "$WORKDIR" ]]; then
+  archive_path="${WORKDIR}.archive.$(date +%Y%m%d_%H%M%S)_$$"
+  mv -- "$WORKDIR" "$archive_path"
+  printf 'Archived previous workdir: %s\n' "$archive_path"
+fi
+mkdir -p -- "$WORKDIR"
 nohup "$APP_DIR/.venv/bin/python" "$APP_DIR/alpha_research_agent.py" \
   --pretty run \
   --budget "${ALPHA_AGENT_BUDGET:-24}" \
