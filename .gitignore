@@ -19,6 +19,8 @@ venv/
 .alpha_pipeline/
 .alpha_pipeline_v2/
 .alpha_agent/
+.alpha_agent*/
+*.archive.*/
 evaluation/
 agent_runs/
 
@@ -30,8 +32,3 @@ screenshots/
 *.tmp
 
 .DS_Store
-.alpha_agent_pivot*/
-*~
-
-.alpha_agent*/
-*.archive.*/

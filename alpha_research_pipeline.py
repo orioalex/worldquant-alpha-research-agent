@@ -8,6 +8,7 @@ import json
 import math
 import os
 import random
+import re
 import sys
 import time
 from dataclasses import dataclass, field
@@ -33,6 +34,76 @@ DEFAULT_IDEA_LIBRARY = Path(__file__).with_name("alpha_pipeline_ideas.json")
 DEFAULT_FIELDS_SUMMARY = Path(__file__).with_name("wqb_data_fields_summary.json")
 DEFAULT_WORKDIR = Path(__file__).with_name(".alpha_pipeline")
 DEFAULT_USER_AGENT = "worldquant-alpha-research/0.1"
+WQ_ALLOWED_OPERATORS = {
+    "abs",
+    "add",
+    "bucket",
+    "ceil",
+    "clamp",
+    "divide",
+    "exp",
+    "floor",
+    "group_backfill",
+    "group_count",
+    "group_mean",
+    "group_neutralize",
+    "group_rank",
+    "group_scale",
+    "group_std_dev",
+    "group_sum",
+    "group_zscore",
+    "hump",
+    "if_else",
+    "log",
+    "max",
+    "min",
+    "multiply",
+    "power",
+    "quantile",
+    "rank",
+    "reverse",
+    "scale",
+    "sign",
+    "signed_power",
+    "sqrt",
+    "subtract",
+    "trade_when",
+    "ts_arg_max",
+    "ts_arg_min",
+    "ts_av_diff",
+    "ts_backfill",
+    "ts_count_nans",
+    "ts_corr",
+    "ts_covariance",
+    "ts_decay_exp_window",
+    "ts_decay_linear",
+    "ts_delay",
+    "ts_delta",
+    "ts_kurtosis",
+    "ts_max",
+    "ts_mean",
+    "ts_min",
+    "ts_product",
+    "ts_rank",
+    "ts_skewness",
+    "ts_std_dev",
+    "ts_step",
+    "ts_sum",
+    "ts_zscore",
+    "winsorize",
+    "zscore",
+}
+WQ_GROUP_NAMES = {
+    "country",
+    "exchange",
+    "industry",
+    "market",
+    "sector",
+    "subindustry",
+}
+_WQ_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_WQ_FUNCTION_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+_WQ_NUMBER_RE = re.compile(r"(?<![A-Za-z0-9_])(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?")
 BLOCKING_CHECKS = {
     "LOW_SHARPE",
     "LOW_FITNESS",
@@ -451,6 +522,75 @@ def candidate_signature(expression: str, settings: Dict[str, Any]) -> str:
     }
     raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def validate_llm_expression(
+    expression: str,
+    *,
+    available_fields: Optional[set[str]],
+    max_factors: int = 3,
+    max_depth: int = 8,
+    max_length: int = 800,
+) -> Dict[str, Any]:
+    """Validate an LLM-proposed FASTEXPR before spending a BRAIN simulation."""
+    text = str(expression or "").strip()
+    errors: List[str] = []
+    if not text:
+        errors.append("expression is empty")
+    if len(text) > max(1, int(max_length)):
+        errors.append(f"expression exceeds {max_length} characters")
+    if text and not re.fullmatch(r"[A-Za-z0-9_+\-*/().,\s<>=!&|]+", text):
+        errors.append("expression contains unsupported characters")
+
+    depth = 0
+    maximum_depth = 0
+    for char in text:
+        if char == "(":
+            depth += 1
+            maximum_depth = max(maximum_depth, depth)
+        elif char == ")":
+            depth -= 1
+            if depth < 0:
+                errors.append("unbalanced parentheses")
+                depth = 0
+                break
+    if depth != 0:
+        errors.append("unbalanced parentheses")
+    if maximum_depth > max(1, int(max_depth)):
+        errors.append(f"expression nesting exceeds {max_depth}")
+
+    functions = sorted(set(_WQ_FUNCTION_RE.findall(text)))
+    unknown_functions = sorted(set(functions) - WQ_ALLOWED_OPERATORS)
+    if unknown_functions:
+        errors.append(f"unknown operators: {', '.join(unknown_functions)}")
+
+    function_names = set(functions)
+    identifiers = set(_WQ_IDENTIFIER_RE.findall(_WQ_NUMBER_RE.sub("", text)))
+    fields = sorted(
+        identifier
+        for identifier in identifiers
+        if identifier not in function_names
+        and identifier.lower() not in WQ_GROUP_NAMES
+        and identifier.lower() not in {"true", "false", "nan"}
+    )
+    unknown_fields = sorted(
+        field for field in fields if available_fields is not None and field not in available_fields
+    )
+    if unknown_fields:
+        errors.append(f"unknown fields: {', '.join(unknown_fields[:8])}")
+    if not fields:
+        errors.append("expression must reference at least one data field")
+    if len(fields) > max(1, int(max_factors)):
+        errors.append(f"expression uses {len(fields)} factors; maximum is {max_factors}")
+
+    return {
+        "valid": not errors,
+        "errors": errors,
+        "fields": fields,
+        "functions": functions,
+        "depth": maximum_depth,
+        "expression": text,
+    }
 
 
 def record_signature(record: Dict[str, Any]) -> Optional[str]:

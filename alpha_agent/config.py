@@ -39,7 +39,12 @@ class AgentConfig:
     shuffle_seeds: bool = True
     random_seed: int = 7
     max_family_budget_share: float = 0.45
+    no_improvement_batch_limit: int = 2
     min_expression_novelty: float = 0.10
+    llm_expression_enabled: bool = True
+    llm_expression_max_factors: int = 3
+    llm_expression_max_depth: int = 8
+    llm_expression_max_length: int = 800
     force_diversify_on_correlation: bool = False
     retries: int = 2
     sleep_between: float = 1.0

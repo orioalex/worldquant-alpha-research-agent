@@ -16,6 +16,7 @@ ALLOWED_ACTIONS = {
     "evaluate_refine",
     "evaluate_diversify",
     "evaluate_robustness",
+    "propose_expression",
     "submit_best",
     "stop",
 }
@@ -28,6 +29,7 @@ class PlannerAction:
     rationale: str = ""
     hypothesis: str = ""
     focus_family: Optional[str] = None
+    expression: Optional[str] = None
     risk_note: str = ""
     target_alpha_id: Optional[str] = None
     raw: Dict[str, Any] | None = None
@@ -44,6 +46,7 @@ class PlannerAction:
                 rationale=self.rationale,
                 hypothesis=self.hypothesis,
                 focus_family=self.focus_family,
+                expression=self.expression,
                 risk_note=self.risk_note,
                 target_alpha_id=self.target_alpha_id,
                 raw=self.raw or {},
@@ -55,6 +58,7 @@ class PlannerAction:
             rationale=self.rationale,
             hypothesis=self.hypothesis,
             focus_family=self.focus_family,
+            expression=self.expression,
             risk_note=self.risk_note,
             target_alpha_id=self.target_alpha_id,
             raw=self.raw or {},
@@ -278,8 +282,12 @@ class OpenAIJsonPlanner:
             "Do not include chain-of-thought or prose outside the JSON object. Keep every text field concise. "
             "Use stage-aware behavior: explore -> exploit -> robustness -> harvest. "
             "Always return strict JSON with keys: action, batch_size, rationale, hypothesis, focus_family, "
-            "risk_note, target_alpha_id. "
-            "Allowed actions: evaluate_seed, evaluate_refine, evaluate_diversify, evaluate_robustness, submit_best, stop. "
+            "expression, risk_note, target_alpha_id. "
+            "Allowed actions: evaluate_seed, evaluate_refine, evaluate_diversify, evaluate_robustness, "
+            "propose_expression, submit_best, stop. "
+            "For propose_expression, expression must be a complete FASTEXPR formula using only the supplied "
+            "fields and operators. It may combine up to the configured number of factors; normalize separate "
+            "factors with rank or zscore before combining them. Never invent fields or operators. "
             "Never exceed remaining_budget. Prefer robustness before submission."
         )
         user_prompt = (
@@ -290,7 +298,9 @@ class OpenAIJsonPlanner:
             "3) In robustness, stress test top candidates over universe/neutralization/truncation changes.\n"
             "4) Submit only in harvest/robustness when governance allows.\n"
             "5) Choose focus_family from available_families when selecting a research direction.\n"
-            "6) Include one concise hypothesis that can be validated by the next batch.\n"
+            "6) In explore or after stagnant refinement, prefer propose_expression to test a genuinely new "
+            "multi-factor hypothesis, especially when expression_generation_enabled is true.\n"
+            "7) Include one concise hypothesis that can be validated by the next batch.\n"
             f"{json.dumps(context, ensure_ascii=False, sort_keys=True)}"
         )
         messages = [
@@ -355,6 +365,9 @@ class OpenAIJsonPlanner:
         focus_family = payload.get("focus_family")
         if focus_family is not None:
             focus_family = str(focus_family)
+        expression = payload.get("expression")
+        if expression is not None:
+            expression = str(expression).strip()
         risk_note = str(payload.get("risk_note") or "")
         target_alpha_id = payload.get("target_alpha_id")
         if target_alpha_id is not None:
@@ -365,6 +378,7 @@ class OpenAIJsonPlanner:
             rationale=rationale,
             hypothesis=hypothesis,
             focus_family=focus_family,
+            expression=expression,
             risk_note=risk_note,
             target_alpha_id=target_alpha_id,
             raw=payload,

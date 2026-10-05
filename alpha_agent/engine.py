@@ -135,6 +135,40 @@ class ResearchToolbox:
         ]
         return len(self.seed_queue)
 
+    def expression_field_catalog(self, limit: int = 240) -> List[str]:
+        """Return a compact, useful field catalog for the planner prompt."""
+        if not self.available_fields:
+            return []
+        preferred_names = [
+            "close",
+            "open",
+            "high",
+            "low",
+            "vwap",
+            "volume",
+            "returns",
+            "market_cap",
+            "scl12_buzz",
+        ]
+        library_fields: List[str] = []
+        for family in self.library.get("families", []):
+            if not isinstance(family, dict):
+                continue
+            library_fields.extend(
+                str(item)
+                for item in family.get("fields", [])
+                if isinstance(item, str)
+            )
+        ordered: List[str] = []
+        seen: set[str] = set()
+        for field in preferred_names + library_fields + sorted(self.available_fields):
+            if field in self.available_fields and field not in seen:
+                seen.add(field)
+                ordered.append(field)
+                if len(ordered) >= max(1, int(limit)):
+                    break
+        return ordered
+
     def pop_seed_candidates(self, count: int, *, focus_family: Optional[str] = None) -> List[pipeline.Candidate]:
         count = max(0, int(count))
         if count == 0:
@@ -314,6 +348,8 @@ class AlphaResearchAgent:
         self.submission_attempts: List[Dict[str, Any]] = []
         self.attempted_submission_ids: set[str] = set()
         self.seed_evaluated_count = 0
+        self.no_improvement_batches = 0
+        self.last_batch_families: set[str] = set()
         self.notebook = ResearchNotebook(
             budget=max(1, int(runtime.agent.budget)),
             max_family_budget_share=runtime.agent.max_family_budget_share,
@@ -448,7 +484,23 @@ class AlphaResearchAgent:
                 continue
 
             batch: List[pipeline.Candidate] = []
-            if decision.action == "evaluate_seed":
+            expression_error: Optional[str] = None
+            if decision.action == "propose_expression":
+                candidate, expression_error = self._build_llm_expression_candidate(
+                    decision=decision,
+                    iteration=iteration,
+                    stage=current_stage,
+                )
+                if candidate is not None:
+                    batch = self._select_batch(
+                        candidates=[candidate],
+                        batch_size=1,
+                        stage=current_stage,
+                        frontier=frontier,
+                        blocked_families=blocked_families,
+                        focus_family=None,
+                    )
+            elif decision.action == "evaluate_seed":
                 raw_seed_batch = self.toolbox.pop_seed_candidates(
                     max(decision.batch_size * 2, decision.batch_size),
                     focus_family=decision.focus_family,
@@ -497,7 +549,11 @@ class AlphaResearchAgent:
                     stage=current_stage,
                     action=decision.action,
                     rationale=decision.rationale,
-                    details={"requested_batch": decision.batch_size, "executed_batch": 0},
+                    details={
+                        "requested_batch": decision.batch_size,
+                        "executed_batch": 0,
+                        "expression_error": expression_error,
+                    },
                     hypothesis=decision.hypothesis,
                     risk_note=decision.risk_note,
                 )
@@ -535,6 +591,22 @@ class AlphaResearchAgent:
             if decision.action == "evaluate_seed":
                 self.seed_evaluated_count += len(records)
 
+            best_score_before = safe_float(frontier[0].get("score")) if frontier else None
+            best_score_after = self._best_score()
+            improved = (
+                best_score_after is not None
+                and (best_score_before is None or best_score_after > best_score_before + 1e-9)
+            )
+            if improved:
+                self.no_improvement_batches = 0
+            else:
+                self.no_improvement_batches += 1
+            self.last_batch_families = {
+                str(record.get("family"))
+                for record in records
+                if isinstance(record.get("family"), str) and record.get("family")
+            }
+
             event_details = {
                 "requested_batch": decision.batch_size,
                 "executed_batch": len(records),
@@ -549,8 +621,12 @@ class AlphaResearchAgent:
                 ),
                 "families": sorted({str(record.get("family") or "") for record in records}),
                 "failed_check_histogram": self.notebook.failed_check_histogram(self.toolbox.results, top_k=5),
-                "best_score_after": self._best_score(),
+                "best_score_before": best_score_before,
+                "best_score_after": best_score_after,
                 "best_alpha_after": self._best_alpha_id(),
+                "improved": improved,
+                "no_improvement_batches": self.no_improvement_batches,
+                "last_batch_families": sorted(self.last_batch_families),
             }
             self._append_event(
                 iteration=iteration,
@@ -639,11 +715,102 @@ class AlphaResearchAgent:
             "evaluate_refine",
             "evaluate_diversify",
             "evaluate_robustness",
+            "propose_expression",
             "submit_best",
             "stop",
         }:
             return PlannerAction.stop(f"Invalid planner action: {action.action}")
+        no_improvement_batches = int(context.get("no_improvement_batches") or 0)
+        diversification_available = int(context.get("diversification_candidates_available") or 0)
+        limit = max(1, int(self.runtime.agent.no_improvement_batch_limit))
+        if (
+            no_improvement_batches >= limit
+            and diversification_available > 0
+            and action.action != "submit_best"
+        ):
+            family = self._choose_diversification_family(context)
+            return PlannerAction(
+                action="evaluate_diversify",
+                batch_size=max(1, action.batch_size or 1),
+                rationale=(
+                    f"Forced diversification after {no_improvement_batches} consecutive batches "
+                    "without improving the best score."
+                ),
+                hypothesis="A different family should restore search progress after a stagnant frontier.",
+                focus_family=family,
+                risk_note="Guardrail overrode the planner to prevent repeated local refinement.",
+                raw={
+                    **(action.raw or {}),
+                    "guardrail": "no_improvement_family_pivot",
+                    "original_action": action.action,
+                },
+            )
         return action
+
+    def _build_llm_expression_candidate(
+        self,
+        *,
+        decision: PlannerAction,
+        iteration: int,
+        stage: str,
+    ) -> Tuple[Optional[pipeline.Candidate], Optional[str]]:
+        if not self.runtime.agent.llm_expression_enabled:
+            return None, "LLM expression generation is disabled."
+        expression = str(decision.expression or "").strip()
+        if not expression:
+            return None, "Planner returned propose_expression without expression."
+        validation = pipeline.validate_llm_expression(
+            expression,
+            available_fields=self.toolbox.available_fields,
+            max_factors=self.runtime.agent.llm_expression_max_factors,
+            max_depth=self.runtime.agent.llm_expression_max_depth,
+            max_length=self.runtime.agent.llm_expression_max_length,
+        )
+        if not validation["valid"]:
+            return None, "; ".join(validation["errors"])
+        candidate = pipeline.Candidate(
+            expression=expression,
+            settings=pipeline.normalize_settings({}),
+            family="llm_generated",
+            idea_name=f"llm_expression_{iteration:03d}",
+            stage="llm_generated",
+            priority=100.0,
+            metadata={
+                "llm_expression": True,
+                "requested_family": decision.focus_family,
+                "fields": validation["fields"],
+                "functions": validation["functions"],
+                "factor_count": len(validation["fields"]),
+                "nesting_depth": validation["depth"],
+            },
+        )
+        if candidate.signature() in self.toolbox.evaluated_signatures:
+            return None, "LLM expression duplicates an already evaluated candidate."
+        return candidate, None
+
+    def _choose_diversification_family(self, context: Dict[str, Any]) -> Optional[str]:
+        last_families = {
+            str(family)
+            for family in context.get("last_batch_families") or []
+            if family
+        }
+        capped = {
+            str(item.get("family"))
+            for item in context.get("family_stats") or []
+            if item.get("family") and item.get("family_cap_reached")
+        }
+        families = [
+            str(family)
+            for family in context.get("diversification_families") or []
+            if family
+        ]
+        for family in families:
+            if family not in last_families and family not in capped:
+                return family
+        for family in families:
+            if family not in capped:
+                return family
+        return None
 
     def _execute_submit_action(
         self,
@@ -794,7 +961,10 @@ class AlphaResearchAgent:
         candidate_pool = list(candidates)
         if focus_family:
             focused = [candidate for candidate in candidate_pool if candidate.family == focus_family]
-            if focused:
+            if focused and (
+                not enforce_family_cap
+                or any(not self.notebook.is_family_capped(candidate.family) for candidate in focused)
+            ):
                 candidate_pool = focused
         ranked = self.notebook.rank_candidates(
             candidates=candidate_pool,
@@ -804,11 +974,19 @@ class AlphaResearchAgent:
         )
         if not enforce_family_cap:
             return list(ranked[:batch_size])
-        uncapped = [candidate for candidate in ranked if not self.notebook.is_family_capped(candidate.family)]
-        if len(uncapped) >= batch_size:
-            return uncapped[:batch_size]
-        merged = uncapped + [candidate for candidate in ranked if candidate not in uncapped]
-        return merged[:batch_size]
+        selected: List[pipeline.Candidate] = []
+        selected_by_family: Dict[str, int] = {}
+        for candidate in ranked:
+            family = candidate.family
+            if self.notebook.is_family_capped(family):
+                continue
+            if selected_by_family.get(family, 0) >= self.notebook.family_cap_remaining(family):
+                continue
+            selected.append(candidate)
+            selected_by_family[family] = selected_by_family.get(family, 0) + 1
+            if len(selected) >= batch_size:
+                break
+        return selected
 
     def _append_event(
         self,
@@ -894,6 +1072,23 @@ class AlphaResearchAgent:
             "research_stage": stage,
             "stage_reason": stage_reason,
             "family_budget_cap": self.notebook.family_cap(),
+            "expression_generation_enabled": self.runtime.agent.llm_expression_enabled,
+            "expression_constraints": {
+                "max_factors": self.runtime.agent.llm_expression_max_factors,
+                "max_depth": self.runtime.agent.llm_expression_max_depth,
+                "max_length": self.runtime.agent.llm_expression_max_length,
+            },
+            "available_expression_fields": self.toolbox.expression_field_catalog(),
+            "allowed_expression_operators": sorted(pipeline.WQ_ALLOWED_OPERATORS),
+            "llm_expression_proposals": sum(
+                1 for event in self.events if event.get("action") == "propose_expression"
+            ),
+            "no_improvement_batches": self.no_improvement_batches,
+            "no_improvement_batch_limit": self.runtime.agent.no_improvement_batch_limit,
+            "last_batch_families": sorted(self.last_batch_families),
+            "diversification_families": sorted(
+                {candidate.family for candidate in diversify_candidates if candidate.family}
+            ),
             "family_stats": self.notebook.family_stats(self.toolbox.results),
             "failed_check_histogram": self.notebook.failed_check_histogram(self.toolbox.results),
             "recent_hypotheses": self.notebook.recent_hypotheses(limit=5),
@@ -902,6 +1097,7 @@ class AlphaResearchAgent:
                 {
                     "alpha_id": item.get("alpha_id"),
                     "family": item.get("family"),
+                    "expression": item.get("expression"),
                     "score": item.get("score"),
                     "failed_checks": item.get("failed_checks"),
                     "stage": item.get("stage"),
@@ -972,6 +1168,10 @@ class AlphaResearchAgent:
                     "robustness_score_threshold": self.runtime.agent.robustness_score_threshold,
                     "max_family_budget_share": self.runtime.agent.max_family_budget_share,
                     "min_expression_novelty": self.runtime.agent.min_expression_novelty,
+                    "llm_expression_enabled": self.runtime.agent.llm_expression_enabled,
+                    "llm_expression_max_factors": self.runtime.agent.llm_expression_max_factors,
+                    "llm_expression_max_depth": self.runtime.agent.llm_expression_max_depth,
+                    "llm_expression_max_length": self.runtime.agent.llm_expression_max_length,
                     "family_filter": list(self.runtime.agent.family_filter),
                     "submission_mode": self.runtime.agent.submission_mode,
                     "allow_pending_checks": self.runtime.agent.allow_pending_checks,

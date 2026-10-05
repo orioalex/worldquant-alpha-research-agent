@@ -146,9 +146,37 @@ def add_run_args(parser: argparse.ArgumentParser) -> None:
         default=float(os.getenv("ALPHA_AGENT_MAX_FAMILY_BUDGET_SHARE", "0.45")),
     )
     parser.add_argument(
+        "--no-improvement-batch-limit",
+        type=int,
+        default=int(os.getenv("ALPHA_AGENT_NO_IMPROVEMENT_BATCH_LIMIT", "2")),
+        help="Force a family diversification pivot after this many non-improving batches.",
+    )
+    parser.add_argument(
         "--min-expression-novelty",
         type=float,
         default=float(os.getenv("ALPHA_AGENT_MIN_EXPRESSION_NOVELTY", "0.10")),
+    )
+    parser.add_argument(
+        "--llm-expression-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=os.getenv("ALPHA_AGENT_LLM_EXPRESSION_ENABLED", "true").lower()
+        in {"1", "true", "yes", "on"},
+        help="Allow the OpenAI-compatible planner to propose complete FASTEXPR formulas.",
+    )
+    parser.add_argument(
+        "--llm-expression-max-factors",
+        type=int,
+        default=int(os.getenv("ALPHA_AGENT_LLM_EXPRESSION_MAX_FACTORS", "3")),
+    )
+    parser.add_argument(
+        "--llm-expression-max-depth",
+        type=int,
+        default=int(os.getenv("ALPHA_AGENT_LLM_EXPRESSION_MAX_DEPTH", "8")),
+    )
+    parser.add_argument(
+        "--llm-expression-max-length",
+        type=int,
+        default=int(os.getenv("ALPHA_AGENT_LLM_EXPRESSION_MAX_LENGTH", "800")),
     )
     parser.add_argument(
         "--force-diversify-on-correlation",
@@ -240,7 +268,12 @@ def build_runtime(args: argparse.Namespace, run_overrides: Optional[Dict[str, An
         robustness_score_threshold=getattr(args, "robustness_score_threshold", 500.0),
         family_filter=tuple(getattr(args, "family", []) or ()),
         max_family_budget_share=getattr(args, "max_family_budget_share", 0.45),
+        no_improvement_batch_limit=getattr(args, "no_improvement_batch_limit", 2),
         min_expression_novelty=getattr(args, "min_expression_novelty", 0.10),
+        llm_expression_enabled=getattr(args, "llm_expression_enabled", True),
+        llm_expression_max_factors=getattr(args, "llm_expression_max_factors", 3),
+        llm_expression_max_depth=getattr(args, "llm_expression_max_depth", 8),
+        llm_expression_max_length=getattr(args, "llm_expression_max_length", 800),
         force_diversify_on_correlation=getattr(args, "force_diversify_on_correlation", False),
         shuffle_seeds=getattr(args, "shuffle_seeds", True),
         random_seed=getattr(args, "random_seed", 7),

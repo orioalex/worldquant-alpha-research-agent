@@ -483,6 +483,11 @@ class ResearchNotebook:
             return False
         return self.run_family_counts.get(family, 0) >= self.family_cap()
 
+    def family_cap_remaining(self, family: str) -> int:
+        if not family:
+            return self.family_cap()
+        return max(0, self.family_cap() - self.run_family_counts.get(family, 0))
+
     def observe_records(self, records: Sequence[Dict[str, Any]]) -> None:
         for record in records:
             family = str(record.get("family") or "")

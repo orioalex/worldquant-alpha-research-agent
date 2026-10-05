@@ -41,7 +41,7 @@ Repository: [https://github.com/zeron-G/worldquant-alpha-research-agent](https:/
 The agent repeatedly executes:
 
 1. gather frontier context (family performance, failed-check histogram, stage, hypotheses)
-2. choose next action (`evaluate_seed`, `evaluate_refine`, `evaluate_diversify`, `evaluate_robustness`, `submit_best`, `stop`)
+2. choose next action (`evaluate_seed`, `evaluate_refine`, `evaluate_diversify`, `evaluate_robustness`, `propose_expression`, `submit_best`, `stop`)
 3. call simulation/check tools
 4. update leaderboard, stage, and research notebook
 5. log rationale, hypothesis, risk note, and outcomes
@@ -163,6 +163,17 @@ OPENAI_API_KEY=your-api-key
 The model provider must support `POST /chat/completions` and JSON response format. The planner is optional; if it is unavailable, the agent falls back to the deterministic heuristic planner.
 
 When the OpenAI-compatible planner returns `focus_family`, the agent now applies it to the next candidate batch for seeds, refinements, diversification, and robustness. If that family has no available candidates, selection falls back to the normal ranked pool.
+
+The OpenAI-compatible planner can also return `action=propose_expression` with a complete FASTEXPR formula. The agent validates its fields, operators, parentheses, nesting depth, factor count, length, and evaluated-signature novelty before sending it to BRAIN. This allows the model to combine multiple fields instead of only mutating the template library. Configure the guardrails with:
+
+```dotenv
+ALPHA_AGENT_LLM_EXPRESSION_ENABLED=true
+ALPHA_AGENT_LLM_EXPRESSION_MAX_FACTORS=3
+ALPHA_AGENT_LLM_EXPRESSION_MAX_DEPTH=8
+ALPHA_AGENT_LLM_EXPRESSION_MAX_LENGTH=800
+```
+
+The LLM still proposes hypotheses only; BRAIN simulation and checks decide whether an expression is useful or submit-ready.
 
 For a local Ollama planner, use a user-space Ollama runtime and port such as `127.0.0.1:11436`. When `ALPHA_AGENT_LOCAL_OLLAMA_AUTOSTART=true`, `start_alpha_agent.sh` checks the endpoint and starts the local Ollama service automatically when needed.
 
