@@ -762,6 +762,7 @@ class AlphaResearchAgent:
         validation = pipeline.validate_llm_expression(
             expression,
             available_fields=self.toolbox.available_fields,
+            min_factors=2,
             max_factors=self.runtime.agent.llm_expression_max_factors,
             max_depth=self.runtime.agent.llm_expression_max_depth,
             max_length=self.runtime.agent.llm_expression_max_length,

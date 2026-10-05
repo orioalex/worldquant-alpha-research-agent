@@ -528,6 +528,7 @@ def validate_llm_expression(
     expression: str,
     *,
     available_fields: Optional[set[str]],
+    min_factors: int = 2,
     max_factors: int = 3,
     max_depth: int = 8,
     max_length: int = 800,
@@ -580,6 +581,8 @@ def validate_llm_expression(
         errors.append(f"unknown fields: {', '.join(unknown_fields[:8])}")
     if not fields:
         errors.append("expression must reference at least one data field")
+    if len(fields) < max(1, int(min_factors)):
+        errors.append(f"expression uses {len(fields)} factors; minimum is {min_factors}")
     if len(fields) > max(1, int(max_factors)):
         errors.append(f"expression uses {len(fields)} factors; maximum is {max_factors}")
 
