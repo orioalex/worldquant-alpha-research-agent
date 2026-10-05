@@ -32,16 +32,55 @@ set +a
 if [[ "${ALPHA_AGENT_PLANNER_PROVIDER:-heuristic}" == "openai" \
   && "${ALPHA_AGENT_LOCAL_OLLAMA_AUTOSTART:-true}" =~ ^(1|true|yes|on)$ ]]; then
   OLLAMA_LOCAL_BIN="${OLLAMA_LOCAL_BIN:-/tmp2/b12902064/ollama-local/bin/ollama}"
+  OLLAMA_LOCAL_RUNNER="${OLLAMA_LOCAL_RUNNER:-/tmp2/b12902064/ollama-local/lib/ollama/llama-server}"
   OLLAMA_LOCAL_HOST="${OLLAMA_LOCAL_HOST:-127.0.0.1:11436}"
   OLLAMA_LOCAL_LOG="${OLLAMA_LOCAL_LOG:-/tmp2/b12902064/ollama-local-11436.log}"
   OLLAMA_LOCAL_PID="${OLLAMA_LOCAL_PID:-/tmp2/b12902064/ollama-local-11436.pid}"
   OLLAMA_MODELS="${OLLAMA_MODELS:-/tmp2/b12902064/.ollama/models}"
+  OLLAMA_MODEL_PATH="${OLLAMA_MODEL_PATH:-}"
   OLLAMA_CONTEXT_LENGTH="${OLLAMA_CONTEXT_LENGTH:-8192}"
   OLLAMA_CUDA_VISIBLE_DEVICES="${OLLAMA_CUDA_VISIBLE_DEVICES:-}"
   OLLAMA_LLM_LIBRARY="${OLLAMA_LLM_LIBRARY:-vulkan}"
   GGML_VK_VISIBLE_DEVICES="${GGML_VK_VISIBLE_DEVICES:-0,1,3,4,5}"
-  ollama_url="http://${OLLAMA_LOCAL_HOST}/api/tags"
-  if ! curl -fsS --max-time 3 "$ollama_url" >/dev/null 2>&1; then
+  OLLAMA_DIRECT_RUNNER="${ALPHA_AGENT_LOCAL_OLLAMA_DIRECT_RUNNER:-false}"
+  ollama_url="http://${OLLAMA_LOCAL_HOST}/v1/models"
+  if [[ "$OLLAMA_DIRECT_RUNNER" =~ ^(1|true|yes|on)$ ]]; then
+    if ! curl -fsS --max-time 3 "$ollama_url" >/dev/null 2>&1; then
+      if [[ ! -x "$OLLAMA_LOCAL_RUNNER" ]]; then
+        printf 'Local llama-server runner not found: %s\n' "$OLLAMA_LOCAL_RUNNER" >&2
+        exit 2
+      fi
+      if [[ -z "$OLLAMA_MODEL_PATH" || ! -f "$OLLAMA_MODEL_PATH" ]]; then
+        printf 'OLLAMA_MODEL_PATH must point to a GGUF model blob for direct runner mode.\n' >&2
+        exit 2
+      fi
+      runner_env=( "GGML_VK_VISIBLE_DEVICES=$GGML_VK_VISIBLE_DEVICES" )
+      if [[ -n "$OLLAMA_CUDA_VISIBLE_DEVICES" ]]; then
+        runner_env+=( "CUDA_VISIBLE_DEVICES=$OLLAMA_CUDA_VISIBLE_DEVICES" )
+      fi
+      nohup env "${runner_env[@]}" "$OLLAMA_LOCAL_RUNNER" \
+        --model "$OLLAMA_MODEL_PATH" \
+        --host "${OLLAMA_LOCAL_HOST%:*}" --port "${OLLAMA_LOCAL_HOST##*:}" \
+        --no-webui --offline -c "$OLLAMA_CONTEXT_LENGTH" -np 1 \
+        --log-verbosity 4 --no-log-prefix --no-log-timestamps --no-jinja \
+        --chat-template chatml --load-mode "${OLLAMA_LOAD_MODE:-none}" \
+        --flash-attn "${OLLAMA_FLASH_ATTENTION:-auto}" -b 512 -ub 512 \
+        --split-mode none --main-gpu 0 --context-shift --keep 4 \
+        >"$OLLAMA_LOCAL_LOG" 2>&1 < /dev/null &
+      printf '%s\n' "$!" > "$OLLAMA_LOCAL_PID"
+      for _ in $(seq 1 120); do
+        if curl -fsS --max-time 3 "$ollama_url" >/dev/null 2>&1; then
+          break
+        fi
+        sleep 1
+      done
+      if ! curl -fsS --max-time 3 "$ollama_url" >/dev/null 2>&1; then
+        printf 'Local direct llama-server failed to start; see %s\n' "$OLLAMA_LOCAL_LOG" >&2
+        exit 2
+      fi
+      printf 'Started local direct llama-server at %s; log: %s\n' "$OLLAMA_LOCAL_HOST" "$OLLAMA_LOCAL_LOG"
+    fi
+  elif ! curl -fsS --max-time 3 "http://${OLLAMA_LOCAL_HOST}/api/tags" >/dev/null 2>&1; then
     if [[ ! -x "$OLLAMA_LOCAL_BIN" ]]; then
       printf 'Local Ollama binary not found: %s\n' "$OLLAMA_LOCAL_BIN" >&2
       exit 2
@@ -60,12 +99,12 @@ if [[ "${ALPHA_AGENT_PLANNER_PROVIDER:-heuristic}" == "openai" \
     fi
     printf '%s\n' "$!" > "$OLLAMA_LOCAL_PID"
     for _ in $(seq 1 60); do
-      if curl -fsS --max-time 3 "$ollama_url" >/dev/null 2>&1; then
+      if curl -fsS --max-time 3 "http://${OLLAMA_LOCAL_HOST}/api/tags" >/dev/null 2>&1; then
         break
       fi
       sleep 1
     done
-    if ! curl -fsS --max-time 3 "$ollama_url" >/dev/null 2>&1; then
+    if ! curl -fsS --max-time 3 "http://${OLLAMA_LOCAL_HOST}/api/tags" >/dev/null 2>&1; then
       printf 'Local Ollama failed to start; see %s\n' "$OLLAMA_LOCAL_LOG" >&2
       exit 2
     fi
