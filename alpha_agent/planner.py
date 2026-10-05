@@ -264,6 +264,14 @@ class OpenAIJsonPlanner:
         try:
             payload = self._request_plan(context=context, api_key=api_key)
             action = self._parse_action(payload=payload, remaining_budget=remaining_budget)
+            if context.get("force_expression_proposal") and action.action != "propose_expression":
+                retry_context = dict(context)
+                retry_context["planner_retry"] = (
+                    "The previous answer did not satisfy the mandatory expression checkpoint. "
+                    "Return propose_expression now with a complete multi-factor FASTEXPR formula."
+                )
+                payload = self._request_plan(context=retry_context, api_key=api_key)
+                action = self._parse_action(payload=payload, remaining_budget=remaining_budget)
             return action
         except Exception as exc:
             message = (
@@ -290,6 +298,13 @@ class OpenAIJsonPlanner:
             "factors with rank or zscore before combining them. Never invent fields or operators. "
             "Never exceed remaining_budget. Prefer robustness before submission."
         )
+        if context.get("force_expression_proposal"):
+            system_prompt += (
+                " A mandatory expression checkpoint is active: you MUST return action=propose_expression, "
+                "include a complete valid FASTEXPR expression, and combine at least two distinct supplied "
+                "data fields after normalizing each factor with rank or zscore. Do not return evaluate_seed "
+                "or evaluate_refine during this checkpoint."
+            )
         user_prompt = (
             "Given this run context, decide the next best action.\n"
             "Decision policy:\n"

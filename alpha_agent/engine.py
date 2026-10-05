@@ -1039,6 +1039,15 @@ class AlphaResearchAgent:
         remaining_budget = max(0, budget - evaluated_total)
         best = frontier[0] if frontier else {}
         best_submittable = self.toolbox.best_submittable_candidate()
+        llm_expression_proposals = sum(
+            1 for event in self.events if event.get("action") == "propose_expression"
+        )
+        force_expression_proposal = (
+            self.runtime.agent.llm_expression_enabled
+            and evaluated_total >= 4
+            and llm_expression_proposals == 0
+            and remaining_budget > 0
+        )
         return {
             "iteration": iteration,
             "budget": budget,
@@ -1080,9 +1089,8 @@ class AlphaResearchAgent:
             },
             "available_expression_fields": self.toolbox.expression_field_catalog(),
             "allowed_expression_operators": sorted(pipeline.WQ_ALLOWED_OPERATORS),
-            "llm_expression_proposals": sum(
-                1 for event in self.events if event.get("action") == "propose_expression"
-            ),
+            "llm_expression_proposals": llm_expression_proposals,
+            "force_expression_proposal": force_expression_proposal,
             "no_improvement_batches": self.no_improvement_batches,
             "no_improvement_batch_limit": self.runtime.agent.no_improvement_batch_limit,
             "last_batch_families": sorted(self.last_batch_families),
