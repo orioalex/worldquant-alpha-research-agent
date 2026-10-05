@@ -29,6 +29,50 @@ set -a
 source "$ENV_FILE"
 set +a
 
+if [[ "${ALPHA_AGENT_PLANNER_PROVIDER:-heuristic}" == "openai" \
+  && "${ALPHA_AGENT_LOCAL_OLLAMA_AUTOSTART:-true}" =~ ^(1|true|yes|on)$ ]]; then
+  OLLAMA_LOCAL_BIN="${OLLAMA_LOCAL_BIN:-/tmp2/b12902064/ollama-local/bin/ollama}"
+  OLLAMA_LOCAL_HOST="${OLLAMA_LOCAL_HOST:-127.0.0.1:11436}"
+  OLLAMA_LOCAL_LOG="${OLLAMA_LOCAL_LOG:-/tmp2/b12902064/ollama-local-11436.log}"
+  OLLAMA_LOCAL_PID="${OLLAMA_LOCAL_PID:-/tmp2/b12902064/ollama-local-11436.pid}"
+  OLLAMA_MODELS="${OLLAMA_MODELS:-/tmp2/b12902064/.ollama/models}"
+  OLLAMA_CONTEXT_LENGTH="${OLLAMA_CONTEXT_LENGTH:-8192}"
+  OLLAMA_CUDA_VISIBLE_DEVICES="${OLLAMA_CUDA_VISIBLE_DEVICES:-}"
+  OLLAMA_LLM_LIBRARY="${OLLAMA_LLM_LIBRARY:-vulkan}"
+  GGML_VK_VISIBLE_DEVICES="${GGML_VK_VISIBLE_DEVICES:-0,1,3,4,5}"
+  ollama_url="http://${OLLAMA_LOCAL_HOST}/api/tags"
+  if ! curl -fsS --max-time 3 "$ollama_url" >/dev/null 2>&1; then
+    if [[ ! -x "$OLLAMA_LOCAL_BIN" ]]; then
+      printf 'Local Ollama binary not found: %s\n' "$OLLAMA_LOCAL_BIN" >&2
+      exit 2
+    fi
+    if [[ -n "$OLLAMA_CUDA_VISIBLE_DEVICES" ]]; then
+      nohup env OLLAMA_HOST="$OLLAMA_LOCAL_HOST" OLLAMA_MODELS="$OLLAMA_MODELS" \
+        OLLAMA_CONTEXT_LENGTH="$OLLAMA_CONTEXT_LENGTH" OLLAMA_NUM_PARALLEL=1 \
+        OLLAMA_LLM_LIBRARY="$OLLAMA_LLM_LIBRARY" GGML_VK_VISIBLE_DEVICES="$GGML_VK_VISIBLE_DEVICES" \
+        CUDA_VISIBLE_DEVICES="$OLLAMA_CUDA_VISIBLE_DEVICES" \
+        "$OLLAMA_LOCAL_BIN" serve >"$OLLAMA_LOCAL_LOG" 2>&1 < /dev/null &
+    else
+      nohup env OLLAMA_HOST="$OLLAMA_LOCAL_HOST" OLLAMA_MODELS="$OLLAMA_MODELS" \
+        OLLAMA_CONTEXT_LENGTH="$OLLAMA_CONTEXT_LENGTH" OLLAMA_NUM_PARALLEL=1 \
+        OLLAMA_LLM_LIBRARY="$OLLAMA_LLM_LIBRARY" GGML_VK_VISIBLE_DEVICES="$GGML_VK_VISIBLE_DEVICES" \
+        "$OLLAMA_LOCAL_BIN" serve >"$OLLAMA_LOCAL_LOG" 2>&1 < /dev/null &
+    fi
+    printf '%s\n' "$!" > "$OLLAMA_LOCAL_PID"
+    for _ in $(seq 1 60); do
+      if curl -fsS --max-time 3 "$ollama_url" >/dev/null 2>&1; then
+        break
+      fi
+      sleep 1
+    done
+    if ! curl -fsS --max-time 3 "$ollama_url" >/dev/null 2>&1; then
+      printf 'Local Ollama failed to start; see %s\n' "$OLLAMA_LOCAL_LOG" >&2
+      exit 2
+    fi
+    printf 'Started local Ollama at %s; log: %s\n' "$OLLAMA_LOCAL_HOST" "$OLLAMA_LOCAL_LOG"
+  fi
+fi
+
 if [[ "${ALPHA_AGENT_RENEW_SEED_ON_START:-true}" =~ ^(1|true|yes|on)$ ]]; then
   if command -v shuf >/dev/null 2>&1; then
     ALPHA_AGENT_RANDOM_SEED="$(shuf -i 1-2147483646 -n 1)"

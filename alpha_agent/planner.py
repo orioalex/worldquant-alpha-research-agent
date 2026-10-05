@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -242,22 +243,39 @@ class OpenAIJsonPlanner:
         remaining_budget = int(context.get("remaining_budget") or 0)
         if remaining_budget <= 0:
             return PlannerAction.stop("Budget exhausted.")
+        fail_fast = os.getenv("ALPHA_AGENT_PLANNER_FAIL_FAST", "false").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
         api_key = os.getenv(self.model_config.api_key_env, "").strip()
         if not api_key:
+            message = f"[planner] missing {self.model_config.api_key_env} for {self.model_config.base_url}"
+            print(message, file=sys.stderr, flush=True)
+            if fail_fast:
+                raise RuntimeError(message)
             return self.fallback.decide(context)
 
         try:
             payload = self._request_plan(context=context, api_key=api_key)
             action = self._parse_action(payload=payload, remaining_budget=remaining_budget)
             return action
-        except Exception:
-            # Any planner failure falls back to deterministic behavior.
+        except Exception as exc:
+            message = (
+                f"[planner] {self.model_config.base_url} planner failed: "
+                f"{type(exc).__name__}: {exc}"
+            )
+            print(message, file=sys.stderr, flush=True)
+            if fail_fast:
+                raise RuntimeError(message) from exc
             return self.fallback.decide(context)
 
     def _request_plan(self, *, context: Dict[str, Any], api_key: str) -> Dict[str, Any]:
         system_prompt = (
             "You are a senior quantitative research lead managing an alpha research book. "
             "Operate like a disciplined PM: hypothesis-driven, risk-aware, and budget-constrained. "
+            "Do not include chain-of-thought or prose outside the JSON object. Keep every text field concise. "
             "Use stage-aware behavior: explore -> exploit -> robustness -> harvest. "
             "Always return strict JSON with keys: action, batch_size, rationale, hypothesis, focus_family, "
             "risk_note, target_alpha_id. "
@@ -283,6 +301,7 @@ class OpenAIJsonPlanner:
             "model": self.model_config.model,
             "messages": messages,
             "temperature": float(self.model_config.temperature),
+            "max_tokens": int(os.getenv("ALPHA_AGENT_PLANNER_MAX_TOKENS", "512")),
             "response_format": {"type": "json_object"},
         }
         response = self._chat_completion(body=body, api_key=api_key)

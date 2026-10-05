@@ -164,6 +164,8 @@ The model provider must support `POST /chat/completions` and JSON response forma
 
 When the OpenAI-compatible planner returns `focus_family`, the agent now applies it to the next candidate batch for seeds, refinements, diversification, and robustness. If that family has no available candidates, selection falls back to the normal ranked pool.
 
+For a local Ollama planner, use a user-space Ollama runtime and port such as `127.0.0.1:11436`. When `ALPHA_AGENT_LOCAL_OLLAMA_AUTOSTART=true`, `start_alpha_agent.sh` checks the endpoint and starts the local Ollama service automatically when needed.
+
 Keep submission disabled while testing:
 
 ```dotenv

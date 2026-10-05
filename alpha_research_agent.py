@@ -229,6 +229,7 @@ def build_runtime(args: argparse.Namespace, run_overrides: Optional[Dict[str, An
         temperature=args.planner_temperature,
         base_url=args.planner_base_url,
         api_key_env=args.planner_api_key_env,
+        timeout=float(os.getenv("ALPHA_AGENT_PLANNER_TIMEOUT", "60")),
     )
     base_agent = AgentConfig(
         budget=getattr(args, "budget", 24),
