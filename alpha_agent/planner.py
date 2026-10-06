@@ -298,6 +298,13 @@ class OpenAIJsonPlanner:
             "factors with rank or zscore before combining them. Never invent fields or operators. "
             "Never exceed remaining_budget. Prefer robustness before submission."
         )
+        strategy_hint = os.getenv("ALPHA_AGENT_PLANNER_SYSTEM_HINT", "").strip()
+        if strategy_hint:
+            system_prompt += (
+                " Search profile for this worker: "
+                + strategy_hint
+                + " Treat this as a strong research preference, while using only supplied fields/operators."
+            )
         if context.get("force_expression_proposal"):
             system_prompt += (
                 " A mandatory expression checkpoint is active: you MUST return action=propose_expression, "
