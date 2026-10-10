@@ -118,6 +118,11 @@ class ResearchToolbox:
             library=self.library,
             family_filter=set(self.agent_cfg.family_filter),
             available_fields=self.available_fields,
+            factor_pool_enabled=self.agent_cfg.factor_pool_enabled,
+            factor_pool_max_atoms=self.agent_cfg.factor_pool_max_atoms,
+            factor_pool_max_pairs=self.agent_cfg.factor_pool_max_pairs,
+            factor_pool_max_triples=self.agent_cfg.factor_pool_max_triples,
+            random_seed=self.agent_cfg.random_seed,
         )
         if self.agent_cfg.force_diversify_on_correlation and pivot_families:
             seeds = [candidate for candidate in seeds if candidate.family not in pivot_families]

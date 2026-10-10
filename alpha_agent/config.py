@@ -45,6 +45,10 @@ class AgentConfig:
     llm_expression_max_factors: int = 3
     llm_expression_max_depth: int = 8
     llm_expression_max_length: int = 800
+    factor_pool_enabled: bool = True
+    factor_pool_max_atoms: int = 160
+    factor_pool_max_pairs: int = 240
+    factor_pool_max_triples: int = 240
     force_diversify_on_correlation: bool = False
     retries: int = 2
     sleep_between: float = 1.0

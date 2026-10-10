@@ -128,6 +128,28 @@ def add_run_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--budget", type=int, default=int(os.getenv("ALPHA_AGENT_BUDGET", "24")))
     parser.add_argument("--max-iterations", type=int, default=int(os.getenv("ALPHA_AGENT_MAX_ITERATIONS", "12")))
     parser.add_argument("--seed-fraction", type=float, default=float(os.getenv("ALPHA_AGENT_SEED_FRACTION", "0.7")))
+    parser.add_argument(
+        "--factor-pool-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=os.getenv("ALPHA_AGENT_FACTOR_POOL_ENABLED", "true").lower()
+        in {"1", "true", "yes", "on"},
+        help="Use bounded cross-family factor-pool combinations for generated seeds.",
+    )
+    parser.add_argument(
+        "--factor-pool-max-atoms",
+        type=int,
+        default=int(os.getenv("ALPHA_AGENT_FACTOR_POOL_MAX_ATOMS", "160")),
+    )
+    parser.add_argument(
+        "--factor-pool-max-pairs",
+        type=int,
+        default=int(os.getenv("ALPHA_AGENT_FACTOR_POOL_MAX_PAIRS", "240")),
+    )
+    parser.add_argument(
+        "--factor-pool-max-triples",
+        type=int,
+        default=int(os.getenv("ALPHA_AGENT_FACTOR_POOL_MAX_TRIPLES", "240")),
+    )
     parser.add_argument("--refine-top-k", type=int, default=int(os.getenv("ALPHA_AGENT_REFINE_TOP_K", "8")))
     parser.add_argument(
         "--robustness-top-k",
@@ -274,6 +296,10 @@ def build_runtime(args: argparse.Namespace, run_overrides: Optional[Dict[str, An
         llm_expression_max_factors=getattr(args, "llm_expression_max_factors", 3),
         llm_expression_max_depth=getattr(args, "llm_expression_max_depth", 8),
         llm_expression_max_length=getattr(args, "llm_expression_max_length", 800),
+        factor_pool_enabled=getattr(args, "factor_pool_enabled", True),
+        factor_pool_max_atoms=getattr(args, "factor_pool_max_atoms", 160),
+        factor_pool_max_pairs=getattr(args, "factor_pool_max_pairs", 240),
+        factor_pool_max_triples=getattr(args, "factor_pool_max_triples", 240),
         force_diversify_on_correlation=getattr(args, "force_diversify_on_correlation", False),
         shuffle_seeds=getattr(args, "shuffle_seeds", True),
         random_seed=getattr(args, "random_seed", 7),

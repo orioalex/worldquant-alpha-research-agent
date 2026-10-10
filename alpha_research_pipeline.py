@@ -620,6 +620,11 @@ def generate_seed_candidates(
     library: Dict[str, Any],
     family_filter: set[str],
     available_fields: Optional[set[str]],
+    factor_pool_enabled: bool = True,
+    factor_pool_max_atoms: int = 160,
+    factor_pool_max_pairs: int = 240,
+    factor_pool_max_triples: int = 240,
+    random_seed: int = 7,
 ) -> List[Candidate]:
     seen: set[str] = set()
     candidates: List[Candidate] = []
@@ -650,6 +655,20 @@ def generate_seed_candidates(
         if candidate.signature() not in seen:
             seen.add(candidate.signature())
             candidates.append(candidate)
+
+    if factor_pool_enabled:
+        candidates.extend(
+            generate_factor_pool_candidates(
+                library=library,
+                family_filter=family_filter,
+                available_fields=available_fields,
+                max_atoms=factor_pool_max_atoms,
+                max_pairs=factor_pool_max_pairs,
+                max_triples=factor_pool_max_triples,
+                random_seed=random_seed,
+            )
+        )
+        return candidates
 
     for family_spec in library.get("families", []):
         if not isinstance(family_spec, dict):
@@ -711,6 +730,224 @@ def generate_seed_candidates(
                                 continue
                             seen.add(candidate.signature())
                             candidates.append(candidate)
+    return candidates
+
+
+def _factor_pool_expression(expression: str) -> str:
+    """Normalize an atom before combining it with another factor."""
+    return f"rank(({expression.strip()}))"
+
+
+def generate_factor_pool_candidates(
+    *,
+    library: Dict[str, Any],
+    family_filter: set[str],
+    available_fields: Optional[set[str]],
+    max_atoms: int = 160,
+    max_pairs: int = 240,
+    max_triples: int = 240,
+    random_seed: int = 7,
+) -> List[Candidate]:
+    """Create a bounded cross-family pool of 2- and 3-factor candidates."""
+    rng = random.Random(int(random_seed))
+    default_settings = library.get("default_settings") or {}
+    if not isinstance(default_settings, dict):
+        default_settings = {}
+
+    synthetic_filter = {"factor_pool_2", "factor_pool_3"} & set(family_filter)
+    source_family_filter = set(family_filter) - synthetic_filter
+    atoms_by_family: Dict[str, List[Candidate]] = {}
+    for family_spec in library.get("families", []):
+        if not isinstance(family_spec, dict):
+            continue
+        family = str(family_spec.get("family") or "")
+        if not family or (source_family_filter and family not in source_family_filter):
+            continue
+        if family.endswith("_combo") or family.endswith("_repair"):
+            continue
+        fields = [
+            str(item)
+            for item in family_spec.get("fields", [])
+            if isinstance(item, str)
+        ]
+        if available_fields is not None:
+            fields = [item for item in fields if item in available_fields]
+        windows = [
+            int(item)
+            for item in family_spec.get("windows", [])
+            if isinstance(item, int)
+        ]
+        signs = [
+            int(item)
+            for item in family_spec.get("signs", [1])
+            if isinstance(item, int)
+        ]
+        templates = [
+            item
+            for item in family_spec.get("templates", [])
+            if isinstance(item, dict)
+        ]
+        settings_grid = [
+            item
+            for item in family_spec.get("settings_grid", [])
+            if isinstance(item, dict)
+        ] or [{}]
+        family_atoms: List[Candidate] = []
+        for field_name in fields:
+            for sign in signs:
+                signed_field = apply_sign(field_name, sign)
+                for template in templates:
+                    template_name = str(template.get("name") or "template")
+                    expression_template = str(template.get("expression") or "")
+                    # Gating operators are valid as standalone expressions,
+                    # but are not stable numeric atoms when nested in rank()
+                    # or combined with another factor.
+                    if any(
+                        operator in expression_template
+                        for operator in ("trade_when", "if_else")
+                    ):
+                        continue
+                    iteration_windows = (
+                        windows if "{window}" in expression_template else [None]
+                    )
+                    for window in iteration_windows:
+                        for settings_index, settings_override in enumerate(settings_grid):
+                            expression = expression_template.format(
+                                field=field_name,
+                                signed_field=signed_field,
+                                window=window,
+                            )
+                            settings = copy.deepcopy(default_settings)
+                            settings.update(copy.deepcopy(settings_override))
+                            family_atoms.append(
+                                Candidate(
+                                    expression=expression,
+                                    settings=normalize_settings(settings),
+                                    family=family,
+                                    idea_name=".".join(
+                                        part
+                                        for part in (
+                                            "factor_atom",
+                                            family,
+                                            template_name,
+                                            field_name,
+                                            f"w{window}" if window is not None else None,
+                                            f"s{sign}",
+                                            f"g{settings_index}",
+                                        )
+                                        if part
+                                    ),
+                                    stage="factor_pool_atom",
+                                    priority=25.0,
+                                    metadata={
+                                        "factor_pool": True,
+                                        "factor_atom": True,
+                                        "field": field_name,
+                                        "sign": sign,
+                                        "window": window,
+                                        "template_name": template_name,
+                                        "template": expression_template,
+                                        "settings_index": settings_index,
+                                    },
+                                )
+                            )
+        if family_atoms:
+            rng.shuffle(family_atoms)
+            atoms_by_family[family] = family_atoms
+
+    families = sorted(atoms_by_family)
+    if not families:
+        return []
+    per_family = max(2, int(math.ceil(max(1, int(max_atoms)) / len(families))))
+    atoms: List[Candidate] = []
+    for family in families:
+        atoms.extend(atoms_by_family[family][:per_family])
+    rng.shuffle(atoms)
+    atoms = atoms[: max(2, int(max_atoms))]
+
+    def distinct_family_sample(size: int) -> Optional[List[Candidate]]:
+        for _ in range(40):
+            sample = rng.sample(atoms, size)
+            if len({item.family for item in sample}) == size:
+                return sample
+        return None
+
+    candidates: List[Candidate] = []
+    seen: set[str] = set()
+    pair_ops = ("+", "-", "*")
+    triple_ops = (("+", "+"), ("+", "-"), ("-", "+"), ("*", "+"))
+
+    pair_enabled = not synthetic_filter or "factor_pool_2" in synthetic_filter
+    triple_enabled = not synthetic_filter or "factor_pool_3" in synthetic_filter
+    for index in range(max(0, int(max_pairs)) * 30 if pair_enabled else 0):
+        if len(candidates) >= max(0, int(max_pairs)):
+            break
+        sample = distinct_family_sample(2)
+        if not sample:
+            break
+        left, right = sample
+        operator = pair_ops[index % len(pair_ops)]
+        expression = (
+            f"({_factor_pool_expression(left.expression)}) "
+            f"{operator} ({_factor_pool_expression(right.expression)})"
+        )
+        family_names = sorted((left.family, right.family))
+        candidate = Candidate(
+            expression=expression,
+            settings=copy.deepcopy(left.settings),
+            family="factor_pool_2",
+            idea_name=f"factor_pool_2.{index:04d}",
+            stage="factor_pool_2",
+            priority=45.0,
+            metadata={
+                "factor_pool": True,
+                "factor_count": 2,
+                "source_families": family_names,
+                "source_fields": [left.metadata.get("field"), right.metadata.get("field")],
+                "operator": operator,
+            },
+        )
+        if candidate.signature() not in seen:
+            seen.add(candidate.signature())
+            candidates.append(candidate)
+
+    pair_count = len(candidates)
+    for index in range(max(0, int(max_triples)) * 40 if triple_enabled else 0):
+        if len(candidates) - pair_count >= max(0, int(max_triples)):
+            break
+        sample = distinct_family_sample(3)
+        if not sample:
+            break
+        first, second, third = sample
+        first_op, second_op = triple_ops[index % len(triple_ops)]
+        expression = (
+            f"(({_factor_pool_expression(first.expression)}) {first_op} "
+            f"({_factor_pool_expression(second.expression)})) {second_op} "
+            f"({_factor_pool_expression(third.expression)})"
+        )
+        family_names = sorted((first.family, second.family, third.family))
+        candidate = Candidate(
+            expression=expression,
+            settings=copy.deepcopy(first.settings),
+            family="factor_pool_3",
+            idea_name=f"factor_pool_3.{index:04d}",
+            stage="factor_pool_3",
+            priority=55.0,
+            metadata={
+                "factor_pool": True,
+                "factor_count": 3,
+                "source_families": family_names,
+                "source_fields": [
+                    first.metadata.get("field"),
+                    second.metadata.get("field"),
+                    third.metadata.get("field"),
+                ],
+                "operators": [first_op, second_op],
+            },
+        )
+        if candidate.signature() not in seen:
+            seen.add(candidate.signature())
+            candidates.append(candidate)
     return candidates
 
 
@@ -918,6 +1155,8 @@ def evaluate_candidate(
                 },
                 "check_raw": check_payload,
             }
+            record["pareto_metrics"] = pareto_metrics(record)
+            record["pareto_score"] = pareto_score(record)
             return record
         except BrainApiError as exc:
             is_retryable = exc.status in {429, 500, 502, 503, 504}
@@ -1168,6 +1407,70 @@ def score_result(detail: Dict[str, Any], check_payload: Any) -> float:
     return round(score, 4)
 
 
+def _clamp01(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))
+
+
+def pareto_metrics(record: Dict[str, Any]) -> Dict[str, float]:
+    """Return comparable objectives for multi-objective candidate ranking."""
+    metrics = record.get("metrics") or {}
+    sharpe = safe_float(metrics.get("sharpe")) or 0.0
+    fitness = safe_float(metrics.get("fitness")) or 0.0
+    turnover = safe_float(metrics.get("turnover")) or 0.0
+    drawdown = safe_float(metrics.get("drawdown")) or 0.0
+    checks = extract_checks(record.get("check_raw"))
+    quality_checks = [
+        item for item in checks if str(item.get("name")) not in CORRELATION_CHECKS
+    ]
+    passed_quality = sum(1 for item in quality_checks if item.get("result") == "PASS")
+    stability_checks = passed_quality / max(1, len(quality_checks))
+    drawdown_stability = _clamp01(1.0 - drawdown / 0.35)
+    turnover_stability = 1.0 if 0.03 <= turnover <= 0.70 else _clamp01(1.0 - abs(turnover - 0.25) / 0.75)
+    stability = _clamp01(
+        0.60 * stability_checks
+        + 0.25 * drawdown_stability
+        + 0.15 * turnover_stability
+    )
+
+    correlation_checks = [
+        item for item in checks if str(item.get("name")) in CORRELATION_CHECKS
+    ]
+    if not correlation_checks:
+        correlation = 0.5
+    else:
+        correlation = sum(
+            1.0 if item.get("result") == "PASS" else 0.0
+            if item.get("result") == "FAIL" else 0.5
+            for item in correlation_checks
+        ) / len(correlation_checks)
+
+    return {
+        "sharpe": _clamp01((sharpe + 0.5) / 2.5),
+        "fitness": _clamp01((fitness + 0.2) / 1.8),
+        "stability": round(stability, 6),
+        "correlation": round(_clamp01(correlation), 6),
+    }
+
+
+def pareto_score(record: Dict[str, Any]) -> float:
+    objectives = pareto_metrics(record)
+    weighted = (
+        objectives["sharpe"] * 0.30
+        + objectives["fitness"] * 0.30
+        + objectives["stability"] * 0.20
+        + objectives["correlation"] * 0.20
+    )
+    return round(weighted * 1000.0, 4)
+
+
+def _pareto_dominates(left: Dict[str, float], right: Dict[str, float]) -> bool:
+    values_left = [left[name] for name in ("sharpe", "fitness", "stability", "correlation")]
+    values_right = [right[name] for name in ("sharpe", "fitness", "stability", "correlation")]
+    return all(a >= b for a, b in zip(values_left, values_right)) and any(
+        a > b for a, b in zip(values_left, values_right)
+    )
+
+
 def build_refinement_candidates(
     top_records: Sequence[Dict[str, Any]],
     *,
@@ -1318,15 +1621,32 @@ def build_leaderboard(
         if record.get("status") != "ok":
             continue
         eligible.append(record)
-    eligible.sort(
+    enriched: List[Dict[str, Any]] = []
+    for record in eligible:
+        item = dict(record)
+        item["pareto_metrics"] = item.get("pareto_metrics") or pareto_metrics(item)
+        item["pareto_score"] = safe_float(item.get("pareto_score"))
+        if item["pareto_score"] is None:
+            item["pareto_score"] = pareto_score(item)
+        enriched.append(item)
+    for item in enriched:
+        item["pareto_dominance_count"] = sum(
+            1
+            for other in enriched
+            if other is not item
+            and _pareto_dominates(other["pareto_metrics"], item["pareto_metrics"])
+        )
+    enriched.sort(
         key=lambda item: (
             0 if record_is_submit_ready(item) else 1,
             0 if record_quality_ready(item) else 1,
+            int(item.get("pareto_dominance_count") or 0),
+            -float(item.get("pareto_score") or -10000.0),
             -float(item.get("score") or -10000.0),
             -(safe_float(item.get("metrics", {}).get("sharpe")) or -999.0),
         )
     )
-    return eligible[:limit]
+    return enriched[:limit]
 
 
 def build_search_summary(
@@ -1381,6 +1701,9 @@ def compact_record(record: Dict[str, Any]) -> Dict[str, Any]:
         "expression": record.get("expression"),
         "settings": record.get("settings"),
         "score": record.get("score"),
+        "pareto_score": record.get("pareto_score") or pareto_score(record),
+        "pareto_metrics": record.get("pareto_metrics") or pareto_metrics(record),
+        "pareto_dominance_count": record.get("pareto_dominance_count"),
         "metrics": record.get("metrics"),
         "failed_checks": record.get("failed_checks"),
         "failed_blocking_checks": record.get("failed_blocking_checks"),
