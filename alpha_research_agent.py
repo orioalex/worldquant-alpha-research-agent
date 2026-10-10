@@ -150,6 +150,18 @@ def add_run_args(parser: argparse.ArgumentParser) -> None:
         type=int,
         default=int(os.getenv("ALPHA_AGENT_FACTOR_POOL_MAX_TRIPLES", "240")),
     )
+    parser.add_argument(
+        "--factor-pool-max-atom-reuse",
+        type=int,
+        default=int(os.getenv("ALPHA_AGENT_FACTOR_POOL_MAX_ATOM_REUSE", "3")),
+        help="Maximum number of factor-pool candidates that may reuse one atom.",
+    )
+    parser.add_argument(
+        "--factor-pool-social-buzz-share",
+        type=float,
+        default=float(os.getenv("ALPHA_AGENT_FACTOR_POOL_SOCIAL_BUZZ_SHARE", "0.5")),
+        help="Relative sampling quota for the social_buzz family.",
+    )
     parser.add_argument("--refine-top-k", type=int, default=int(os.getenv("ALPHA_AGENT_REFINE_TOP_K", "8")))
     parser.add_argument(
         "--robustness-top-k",
@@ -300,6 +312,8 @@ def build_runtime(args: argparse.Namespace, run_overrides: Optional[Dict[str, An
         factor_pool_max_atoms=getattr(args, "factor_pool_max_atoms", 160),
         factor_pool_max_pairs=getattr(args, "factor_pool_max_pairs", 240),
         factor_pool_max_triples=getattr(args, "factor_pool_max_triples", 240),
+        factor_pool_max_atom_reuse=getattr(args, "factor_pool_max_atom_reuse", 3),
+        factor_pool_social_buzz_share=getattr(args, "factor_pool_social_buzz_share", 0.5),
         force_diversify_on_correlation=getattr(args, "force_diversify_on_correlation", False),
         shuffle_seeds=getattr(args, "shuffle_seeds", True),
         random_seed=getattr(args, "random_seed", 7),

@@ -624,6 +624,8 @@ def generate_seed_candidates(
     factor_pool_max_atoms: int = 160,
     factor_pool_max_pairs: int = 240,
     factor_pool_max_triples: int = 240,
+    factor_pool_max_atom_reuse: int = 3,
+    factor_pool_social_buzz_share: float = 0.5,
     random_seed: int = 7,
 ) -> List[Candidate]:
     seen: set[str] = set()
@@ -665,6 +667,8 @@ def generate_seed_candidates(
                 max_atoms=factor_pool_max_atoms,
                 max_pairs=factor_pool_max_pairs,
                 max_triples=factor_pool_max_triples,
+                max_atom_reuse=factor_pool_max_atom_reuse,
+                social_buzz_share=factor_pool_social_buzz_share,
                 random_seed=random_seed,
             )
         )
@@ -746,6 +750,8 @@ def generate_factor_pool_candidates(
     max_atoms: int = 160,
     max_pairs: int = 240,
     max_triples: int = 240,
+    max_atom_reuse: int = 3,
+    social_buzz_share: float = 0.5,
     random_seed: int = 7,
 ) -> List[Candidate]:
     """Create a bounded cross-family pool of 2- and 3-factor candidates."""
@@ -859,18 +865,37 @@ def generate_factor_pool_candidates(
     if not families:
         return []
     per_family = max(2, int(math.ceil(max(1, int(max_atoms)) / len(families))))
+    social_share = max(0.0, min(1.0, float(social_buzz_share)))
     atoms: List[Candidate] = []
     for family in families:
-        atoms.extend(atoms_by_family[family][:per_family])
+        family_limit = per_family
+        if family == "social_buzz":
+            family_limit = max(1, int(math.floor(per_family * social_share)))
+        atoms.extend(atoms_by_family[family][:family_limit])
     rng.shuffle(atoms)
     atoms = atoms[: max(2, int(max_atoms))]
 
+    max_reuse = max(1, int(max_atom_reuse))
+    atom_usage: Dict[str, int] = {}
+
     def distinct_family_sample(size: int) -> Optional[List[Candidate]]:
-        for _ in range(40):
-            sample = rng.sample(atoms, size)
+        eligible = [
+            item
+            for item in atoms
+            if atom_usage.get(item.signature(), 0) < max_reuse
+        ]
+        if len(eligible) < size:
+            return None
+        for _ in range(80):
+            sample = rng.sample(eligible, size)
             if len({item.family for item in sample}) == size:
                 return sample
         return None
+
+    def consume_atoms(sample: Sequence[Candidate]) -> None:
+        for item in sample:
+            signature = item.signature()
+            atom_usage[signature] = atom_usage.get(signature, 0) + 1
 
     candidates: List[Candidate] = []
     seen: set[str] = set()
@@ -879,75 +904,91 @@ def generate_factor_pool_candidates(
 
     pair_enabled = not synthetic_filter or "factor_pool_2" in synthetic_filter
     triple_enabled = not synthetic_filter or "factor_pool_3" in synthetic_filter
-    for index in range(max(0, int(max_pairs)) * 30 if pair_enabled else 0):
-        if len(candidates) >= max(0, int(max_pairs)):
-            break
-        sample = distinct_family_sample(2)
-        if not sample:
-            break
-        left, right = sample
-        operator = pair_ops[index % len(pair_ops)]
-        expression = (
-            f"({_factor_pool_expression(left.expression)}) "
-            f"{operator} ({_factor_pool_expression(right.expression)})"
-        )
-        family_names = sorted((left.family, right.family))
-        candidate = Candidate(
-            expression=expression,
-            settings=copy.deepcopy(left.settings),
-            family="factor_pool_2",
-            idea_name=f"factor_pool_2.{index:04d}",
-            stage="factor_pool_2",
-            priority=45.0,
-            metadata={
-                "factor_pool": True,
-                "factor_count": 2,
-                "source_families": family_names,
-                "source_fields": [left.metadata.get("field"), right.metadata.get("field")],
-                "operator": operator,
-            },
-        )
-        if candidate.signature() not in seen:
-            seen.add(candidate.signature())
-            candidates.append(candidate)
+    pair_count = 0
+    triple_count = 0
+    pair_limit = max(0, int(max_pairs))
+    triple_limit = max(0, int(max_triples))
+    for index in range(max(pair_limit, triple_limit) * 100 if (pair_enabled or triple_enabled) else 0):
+        progress = False
+        if pair_enabled and pair_count < pair_limit:
+            sample = distinct_family_sample(2)
+            if sample:
+                left, right = sample
+                operator = pair_ops[pair_count % len(pair_ops)]
+                expression = (
+                    f"({_factor_pool_expression(left.expression)}) "
+                    f"{operator} ({_factor_pool_expression(right.expression)})"
+                )
+                family_names = sorted((left.family, right.family))
+                candidate = Candidate(
+                    expression=expression,
+                    settings=copy.deepcopy(left.settings),
+                    family="factor_pool_2",
+                    idea_name=f"factor_pool_2.{pair_count:04d}",
+                    stage="factor_pool_2",
+                    priority=45.0,
+                    metadata={
+                        "factor_pool": True,
+                        "factor_count": 2,
+                        "source_families": family_names,
+                        "source_fields": [left.metadata.get("field"), right.metadata.get("field")],
+                        "source_atom_signatures": [left.signature(), right.signature()],
+                        "operator": operator,
+                    },
+                )
+                if candidate.signature() not in seen:
+                    seen.add(candidate.signature())
+                    consume_atoms(sample)
+                    candidates.append(candidate)
+                    pair_count += 1
+                    progress = True
 
-    pair_count = len(candidates)
-    for index in range(max(0, int(max_triples)) * 40 if triple_enabled else 0):
-        if len(candidates) - pair_count >= max(0, int(max_triples)):
+        if triple_enabled and triple_count < triple_limit:
+            sample = distinct_family_sample(3)
+            if sample:
+                first, second, third = sample
+                first_op, second_op = triple_ops[triple_count % len(triple_ops)]
+                expression = (
+                    f"(({_factor_pool_expression(first.expression)}) {first_op} "
+                    f"({_factor_pool_expression(second.expression)})) {second_op} "
+                    f"({_factor_pool_expression(third.expression)})"
+                )
+                family_names = sorted((first.family, second.family, third.family))
+                candidate = Candidate(
+                    expression=expression,
+                    settings=copy.deepcopy(first.settings),
+                    family="factor_pool_3",
+                    idea_name=f"factor_pool_3.{triple_count:04d}",
+                    stage="factor_pool_3",
+                    priority=55.0,
+                    metadata={
+                        "factor_pool": True,
+                        "factor_count": 3,
+                        "source_families": family_names,
+                        "source_fields": [
+                            first.metadata.get("field"),
+                            second.metadata.get("field"),
+                            third.metadata.get("field"),
+                        ],
+                        "source_atom_signatures": [
+                            first.signature(),
+                            second.signature(),
+                            third.signature(),
+                        ],
+                        "operators": [first_op, second_op],
+                    },
+                )
+                if candidate.signature() not in seen:
+                    seen.add(candidate.signature())
+                    consume_atoms(sample)
+                    candidates.append(candidate)
+                    triple_count += 1
+                    progress = True
+
+        if pair_count >= pair_limit and triple_count >= triple_limit:
             break
-        sample = distinct_family_sample(3)
-        if not sample:
+        if not progress:
             break
-        first, second, third = sample
-        first_op, second_op = triple_ops[index % len(triple_ops)]
-        expression = (
-            f"(({_factor_pool_expression(first.expression)}) {first_op} "
-            f"({_factor_pool_expression(second.expression)})) {second_op} "
-            f"({_factor_pool_expression(third.expression)})"
-        )
-        family_names = sorted((first.family, second.family, third.family))
-        candidate = Candidate(
-            expression=expression,
-            settings=copy.deepcopy(first.settings),
-            family="factor_pool_3",
-            idea_name=f"factor_pool_3.{index:04d}",
-            stage="factor_pool_3",
-            priority=55.0,
-            metadata={
-                "factor_pool": True,
-                "factor_count": 3,
-                "source_families": family_names,
-                "source_fields": [
-                    first.metadata.get("field"),
-                    second.metadata.get("field"),
-                    third.metadata.get("field"),
-                ],
-                "operators": [first_op, second_op],
-            },
-        )
-        if candidate.signature() not in seen:
-            seen.add(candidate.signature())
-            candidates.append(candidate)
     return candidates
 
 

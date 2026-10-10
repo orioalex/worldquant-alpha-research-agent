@@ -1,5 +1,6 @@
 import json
 import unittest
+from collections import Counter
 
 import alpha_research_pipeline as pipeline
 
@@ -40,6 +41,33 @@ class FactorPoolTests(unittest.TestCase):
         )
         self.assertEqual(len(candidates), 4)
         self.assertTrue(all(item.family == "factor_pool_3" for item in candidates))
+
+    def test_atom_reuse_and_social_buzz_share_are_bounded(self) -> None:
+        candidates = pipeline.generate_seed_candidates(
+            library=self.library,
+            family_filter=set(),
+            available_fields=self.fields,
+            factor_pool_max_atoms=80,
+            factor_pool_max_pairs=40,
+            factor_pool_max_triples=40,
+            factor_pool_max_atom_reuse=2,
+            factor_pool_social_buzz_share=0.25,
+            random_seed=29,
+        )
+        pool = [item for item in candidates if item.metadata.get("factor_pool")]
+        usage = Counter(
+            signature
+            for item in pool
+            for signature in item.metadata.get("source_atom_signatures", [])
+        )
+        self.assertTrue(usage)
+        self.assertLessEqual(max(usage.values()), 2)
+        social_candidates = [
+            item
+            for item in pool
+            if "social_buzz" in item.metadata.get("source_families", [])
+        ]
+        self.assertLessEqual(len(social_candidates), len(pool) * 0.5)
 
     def test_pareto_objectives_penalize_failed_correlation(self) -> None:
         base = {

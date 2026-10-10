@@ -122,6 +122,8 @@ class ResearchToolbox:
             factor_pool_max_atoms=self.agent_cfg.factor_pool_max_atoms,
             factor_pool_max_pairs=self.agent_cfg.factor_pool_max_pairs,
             factor_pool_max_triples=self.agent_cfg.factor_pool_max_triples,
+            factor_pool_max_atom_reuse=self.agent_cfg.factor_pool_max_atom_reuse,
+            factor_pool_social_buzz_share=self.agent_cfg.factor_pool_social_buzz_share,
             random_seed=self.agent_cfg.random_seed,
         )
         if self.agent_cfg.force_diversify_on_correlation and pivot_families:
