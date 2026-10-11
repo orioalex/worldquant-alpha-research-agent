@@ -226,8 +226,9 @@ class ResearchToolbox:
             if signature
         }
 
-    def refresh_seed_queue(self) -> int:
+    def refresh_seed_queue(self, random_seed: Optional[int] = None) -> int:
         pivot_families = pipeline.correlation_pivot_families(self.results)
+        search_seed = self.agent_cfg.random_seed if random_seed is None else int(random_seed)
         seeds = pipeline.generate_seed_candidates(
             library=self.library,
             family_filter=set(self.agent_cfg.family_filter),
@@ -240,7 +241,7 @@ class ResearchToolbox:
             factor_pool_social_buzz_share=self.agent_cfg.factor_pool_social_buzz_share,
             atom_scores=self.atom_scores,
             learned_atom_sampling=self.agent_cfg.learned_atom_sampling,
-            random_seed=self.agent_cfg.random_seed,
+            random_seed=search_seed,
         )
         if self.agent_cfg.force_diversify_on_correlation and pivot_families:
             seeds = [candidate for candidate in seeds if candidate.family not in pivot_families]
@@ -248,7 +249,7 @@ class ResearchToolbox:
             seeds=seeds,
             blocked_families=pivot_families,
             shuffle_generated=self.agent_cfg.shuffle_seeds,
-            random_seed=self.agent_cfg.random_seed,
+            random_seed=search_seed,
         )
         self.all_ordered_seeds = ordered
         self.seed_queue = [
@@ -624,6 +625,7 @@ class AlphaResearchAgent:
                 continue
 
             batch: List[pipeline.Candidate] = []
+            execution_action = decision.action
             expression_error: Optional[str] = None
             if decision.action == "propose_expression":
                 candidate, expression_error = self._build_llm_expression_candidate(
@@ -682,14 +684,66 @@ class AlphaResearchAgent:
                     enforce_family_cap=False,
                 )
 
+            fallback_from: Optional[str] = None
             if not batch:
-                stop_reason = f"No candidates available for {decision.action}."
+                fallback_specs = [
+                    ("evaluate_diversify", ranked_diversify, current_stage, blocked_families, True),
+                    ("evaluate_seed", None, current_stage, blocked_families, True),
+                    ("evaluate_robustness", ranked_robustness, "robustness", set(), False),
+                    ("evaluate_refine", ranked_refine, current_stage, blocked_families, True),
+                ]
+                for fallback_action, candidates, fallback_stage, fallback_blocked, enforce_cap in fallback_specs:
+                    if fallback_action == decision.action:
+                        continue
+                    if fallback_action == "evaluate_seed":
+                        retry_seed = int(self.runtime.agent.random_seed) + iteration * 1009 + len(self.events)
+                        self.toolbox.refresh_seed_queue(random_seed=retry_seed)
+                        candidates = self.toolbox.pop_seed_candidates(
+                            max(decision.batch_size * 2, decision.batch_size),
+                            focus_family=None,
+                        )
+                    batch = self._select_batch(
+                        candidates=candidates or [],
+                        batch_size=decision.batch_size,
+                        stage=fallback_stage,
+                        frontier=frontier,
+                        blocked_families=fallback_blocked,
+                        focus_family=None,
+                        enforce_family_cap=enforce_cap,
+                    )
+                    if batch:
+                        execution_action = fallback_action
+                        fallback_from = decision.action
+                        break
+
+            if not batch:
+                retry_seed = int(self.runtime.agent.random_seed) + iteration * 1009 + len(self.events)
+                self.toolbox.refresh_seed_queue(random_seed=retry_seed)
+                retry_candidates = self.toolbox.pop_seed_candidates(
+                    max(decision.batch_size * 2, decision.batch_size),
+                    focus_family=None,
+                )
+                batch = self._select_batch(
+                    candidates=retry_candidates,
+                    batch_size=decision.batch_size,
+                    stage="explore",
+                    frontier=frontier,
+                    blocked_families=blocked_families,
+                    focus_family=None,
+                )
+                if batch:
+                    execution_action = "evaluate_seed"
+                    fallback_from = decision.action
+
+            if not batch:
+                stop_reason = f"Candidate queues exhausted after retrying {decision.action}."
                 self._append_event(
                     iteration=iteration,
                     stage=current_stage,
-                    action=decision.action,
-                    rationale=decision.rationale,
+                    action="no_candidates",
+                    rationale="Planner action had no candidates; all fallback queues were also empty.",
                     details={
+                        "requested_action": decision.action,
                         "requested_batch": decision.batch_size,
                         "executed_batch": 0,
                         "expression_error": expression_error,
@@ -699,13 +753,28 @@ class AlphaResearchAgent:
                 )
                 continue
 
+            if fallback_from:
+                self._append_event(
+                    iteration=iteration,
+                    stage=current_stage,
+                    action="fallback",
+                    rationale=f"No candidates for {fallback_from}; executing {execution_action} instead.",
+                    details={
+                        "requested_action": fallback_from,
+                        "executed_action": execution_action,
+                        "executed_batch": len(batch),
+                    },
+                    hypothesis=decision.hypothesis,
+                    risk_note=decision.risk_note,
+                )
+
             self._emit_progress(
                 {
                     "type": "batch_started",
                     "run_id": run_id,
                     "iteration": iteration,
                     "stage": current_stage,
-                    "action": decision.action,
+                    "action": execution_action,
                     "batch_size": len(batch),
                     "candidates": [candidate.to_record() for candidate in batch],
                     "remaining_budget": remaining_budget,
@@ -714,7 +783,7 @@ class AlphaResearchAgent:
 
             records = self.toolbox.evaluate_candidates(
                 batch,
-                progress_callback=lambda payload, iteration=iteration, stage=current_stage, action=decision.action: self._emit_progress(
+                progress_callback=lambda payload, iteration=iteration, stage=current_stage, action=execution_action: self._emit_progress(
                     {
                         **payload,
                         "run_id": run_id,
@@ -728,7 +797,7 @@ class AlphaResearchAgent:
             self.notebook.observe_records(records)
             evaluated_total += len(records)
             evaluated_this_run += len(records)
-            if decision.action == "evaluate_seed":
+            if execution_action == "evaluate_seed":
                 self.seed_evaluated_count += len(records)
 
             best_score_before = safe_float(frontier[0].get("score")) if frontier else None
@@ -771,7 +840,7 @@ class AlphaResearchAgent:
             self._append_event(
                 iteration=iteration,
                 stage=current_stage,
-                action=decision.action,
+                action=execution_action,
                 rationale=decision.rationale,
                 details=event_details,
                 hypothesis=decision.hypothesis,
@@ -784,7 +853,7 @@ class AlphaResearchAgent:
                     "run_id": run_id,
                     "iteration": iteration,
                     "stage": current_stage,
-                    "action": decision.action,
+                    "action": execution_action,
                     "details": event_details,
                     "leaderboard": [
                         pipeline.compact_record(item)
