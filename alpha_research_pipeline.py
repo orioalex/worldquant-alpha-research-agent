@@ -626,6 +626,8 @@ def generate_seed_candidates(
     factor_pool_max_triples: int = 240,
     factor_pool_max_atom_reuse: int = 3,
     factor_pool_social_buzz_share: float = 0.5,
+    atom_scores: Optional[Dict[str, float]] = None,
+    learned_atom_sampling: float = 0.7,
     random_seed: int = 7,
 ) -> List[Candidate]:
     seen: set[str] = set()
@@ -669,6 +671,8 @@ def generate_seed_candidates(
                 max_triples=factor_pool_max_triples,
                 max_atom_reuse=factor_pool_max_atom_reuse,
                 social_buzz_share=factor_pool_social_buzz_share,
+                atom_scores=atom_scores,
+                learned_atom_sampling=learned_atom_sampling,
                 random_seed=random_seed,
             )
         )
@@ -752,6 +756,8 @@ def generate_factor_pool_candidates(
     max_triples: int = 240,
     max_atom_reuse: int = 3,
     social_buzz_share: float = 0.5,
+    atom_scores: Optional[Dict[str, float]] = None,
+    learned_atom_sampling: float = 0.7,
     random_seed: int = 7,
 ) -> List[Candidate]:
     """Create a bounded cross-family pool of 2- and 3-factor candidates."""
@@ -858,7 +864,19 @@ def generate_factor_pool_candidates(
                                 )
                             )
         if family_atoms:
-            rng.shuffle(family_atoms)
+            learning = max(0.0, min(1.0, float(learned_atom_sampling)))
+            if atom_scores:
+                # Keep exploration noise, but let prior WQ results bias the
+                # next pool toward atoms that survived the quality gates.
+                family_atoms.sort(
+                    key=lambda item: (
+                        learning * max(0.0, min(1.0, float(atom_scores.get(item.signature(), 0.0))))
+                        + (1.0 - learning) * rng.random()
+                    ),
+                    reverse=True,
+                )
+            else:
+                rng.shuffle(family_atoms)
             atoms_by_family[family] = family_atoms
 
     families = sorted(atoms_by_family)
@@ -1647,6 +1665,157 @@ def build_refinement_candidates(
         seen.add(candidate.signature())
         deduped.append(candidate)
     return deduped
+
+
+def _evolution_factor_count(record: Dict[str, Any]) -> int:
+    metadata = record.get("metadata") or {}
+    value = metadata.get("factor_count")
+    if isinstance(value, int) and value > 0:
+        return value
+    return 1
+
+
+def _mutate_expression_window(expression: str, window: int) -> Optional[str]:
+    pattern = re.compile(
+        r"(ts_(?:mean|sum|rank|delta|zscore|std_dev|decay_linear|decay_exp_window)\s*\([^,()]+,\s*)"
+        r"\d+(\s*\))"
+    )
+    match = pattern.search(expression)
+    if not match:
+        return None
+    return expression[: match.start()] + match.group(1) + str(window) + match.group(2) + expression[match.end() :]
+
+
+def _mutate_expression_operator(expression: str, operator: str) -> Optional[str]:
+    pattern = re.compile(r"\)\s*[+\-*]\s*\(")
+    match = pattern.search(expression)
+    if not match:
+        return None
+    return expression[: match.start()] + ") " + operator + " (" + expression[match.end() :]
+
+
+def build_evolutionary_candidates(
+    top_records: Sequence[Dict[str, Any]],
+    *,
+    family_filter: set[str],
+    blocked_families: Optional[set[str]] = None,
+    max_candidates: int = 32,
+    random_seed: int = 7,
+) -> List[Candidate]:
+    """Create novelty-preserving mutations and crossovers from the Pareto frontier."""
+    blocked_families = blocked_families or set()
+    rng = random.Random(int(random_seed))
+    parents = [
+        record
+        for record in top_records
+        if record.get("status") == "ok"
+        and isinstance(record.get("expression"), str)
+        and str(record.get("family") or "") not in blocked_families
+        and (not family_filter or record.get("family") in family_filter)
+        and "trade_when" not in str(record.get("expression"))
+        and "if_else" not in str(record.get("expression"))
+    ]
+    parents = sorted(
+        parents,
+        key=lambda item: float(item.get("pareto_score") or pareto_score(item)),
+        reverse=True,
+    )[:12]
+    if not parents or max_candidates <= 0:
+        return []
+
+    candidates: List[Candidate] = []
+    seen: set[str] = set()
+    windows = (3, 5, 8, 13, 20, 26, 40, 60)
+    operators = ("+", "-", "*")
+
+    def add_candidate(
+        *,
+        expression: str,
+        parent: Dict[str, Any],
+        family: str,
+        stage: str,
+        suffix: str,
+        metadata: Dict[str, Any],
+    ) -> None:
+        if len(candidates) >= int(max_candidates) or not expression or len(expression) > 800:
+            return
+        candidate = Candidate(
+            expression=expression,
+            settings=normalize_settings(parent.get("settings") or {}),
+            family=family,
+            idea_name=f"evolution.{parent.get('idea_name')}.{suffix}",
+            stage=stage,
+            priority=float(parent.get("pareto_score") or pareto_score(parent)) + 25.0,
+            parent_key=parent.get("candidate_key"),
+            metadata={
+                **(parent.get("metadata") or {}),
+                **metadata,
+                "evolutionary": True,
+                "parent_alpha_id": parent.get("alpha_id"),
+            },
+        )
+        if candidate.signature() in seen:
+            return
+        seen.add(candidate.signature())
+        candidates.append(candidate)
+
+    for index, parent in enumerate(parents):
+        expression = str(parent["expression"])
+        family = str(parent.get("family") or "evolutionary")
+        next_window = windows[(index + 2) % len(windows)]
+        window_expression = _mutate_expression_window(expression, next_window)
+        if window_expression and window_expression != expression:
+            add_candidate(
+                expression=window_expression,
+                parent=parent,
+                family=family,
+                stage="evolve_window",
+                suffix=f"window{next_window}",
+                metadata={"evolution": "window", "window": next_window},
+            )
+        next_operator = operators[index % len(operators)]
+        operator_expression = _mutate_expression_operator(expression, next_operator)
+        if operator_expression and operator_expression != expression:
+            add_candidate(
+                expression=operator_expression,
+                parent=parent,
+                family=family,
+                stage="evolve_operator",
+                suffix=f"op{index % len(operators)}",
+                metadata={"evolution": "operator", "operator": next_operator},
+            )
+        if len(candidates) >= max_candidates:
+            break
+
+    if len(candidates) < max_candidates and (not family_filter or "evolutionary_combo" in family_filter):
+        crossover_pairs = [(left, right) for left in parents for right in parents if left is not right]
+        rng.shuffle(crossover_pairs)
+        for index, (left, right) in enumerate(crossover_pairs):
+            if len(candidates) >= max_candidates:
+                break
+            left_families = set((left.get("metadata") or {}).get("source_families") or [left.get("family")])
+            right_families = set((right.get("metadata") or {}).get("source_families") or [right.get("family")])
+            if left_families & right_families:
+                continue
+            if _evolution_factor_count(left) + _evolution_factor_count(right) > 4:
+                continue
+            operator = operators[index % len(operators)]
+            expression = f"(rank(({left['expression']}))) {operator} (rank(({right['expression']})))"
+            add_candidate(
+                expression=expression,
+                parent=left,
+                family="evolutionary_combo",
+                stage="evolve_crossover",
+                suffix=f"cross{index:03d}",
+                metadata={
+                    "evolution": "crossover",
+                    "factor_count": _evolution_factor_count(left) + _evolution_factor_count(right),
+                    "source_families": sorted(left_families | right_families),
+                    "parent_keys": [left.get("candidate_key"), right.get("candidate_key")],
+                    "operator": operator,
+                },
+            )
+    return candidates
 
 
 def build_leaderboard(

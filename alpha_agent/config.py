@@ -51,6 +51,9 @@ class AgentConfig:
     factor_pool_max_triples: int = 240
     factor_pool_max_atom_reuse: int = 3
     factor_pool_social_buzz_share: float = 0.5
+    evolutionary_candidates: int = 32
+    elite_archive_size: int = 64
+    learned_atom_sampling: float = 0.7
     force_diversify_on_correlation: bool = False
     retries: int = 2
     sleep_between: float = 1.0

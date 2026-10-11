@@ -87,6 +87,44 @@ class FactorPoolTests(unittest.TestCase):
         )
         self.assertGreater(pipeline.pareto_score(base), pipeline.pareto_score(blocked))
 
+    def test_evolutionary_search_creates_mutations_and_crossovers(self) -> None:
+        records = [
+            {
+                "status": "ok",
+                "alpha_id": "A1",
+                "candidate_key": "k1",
+                "idea_name": "seed1",
+                "family": "price_momentum",
+                "expression": "rank((ts_mean(close, 5))) + rank((ts_mean(volume, 20)))",
+                "settings": {"region": "USA", "universe": "TOP3000", "delay": 1},
+                "metadata": {"factor_count": 2, "source_families": ["price_momentum", "volume_flow"]},
+                "metrics": {"sharpe": 1.5, "fitness": 1.1, "turnover": 0.2, "drawdown": 0.1},
+                "check_raw": {"is": {"checks": []}},
+            },
+            {
+                "status": "ok",
+                "alpha_id": "A2",
+                "candidate_key": "k2",
+                "idea_name": "seed2",
+                "family": "quality",
+                "expression": "rank((ts_mean(returns, 13)))",
+                "settings": {"region": "USA", "universe": "TOP3000", "delay": 1},
+                "metadata": {"factor_count": 1, "source_families": ["quality"]},
+                "metrics": {"sharpe": 1.3, "fitness": 1.0, "turnover": 0.2, "drawdown": 0.1},
+                "check_raw": {"is": {"checks": []}},
+            },
+        ]
+        candidates = pipeline.build_evolutionary_candidates(
+            records,
+            family_filter=set(),
+            max_candidates=12,
+            random_seed=4,
+        )
+        self.assertTrue(candidates)
+        self.assertTrue(any(item.stage == "evolve_window" for item in candidates))
+        self.assertTrue(any(item.stage == "evolve_crossover" for item in candidates))
+        self.assertTrue(all("trade_when" not in item.expression for item in candidates))
+
 
 if __name__ == "__main__":
     unittest.main()

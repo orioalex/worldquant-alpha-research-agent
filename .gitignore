@@ -32,3 +32,4 @@ screenshots/
 *.tmp
 
 .DS_Store
+.alpha_agent_elite_archive.json

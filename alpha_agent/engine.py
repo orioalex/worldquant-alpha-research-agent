@@ -61,6 +61,7 @@ class ResearchToolbox:
         self.results_store = pipeline.JsonlStore(self.workdir / "results.jsonl")
         self.submissions_store = pipeline.JsonlStore(self.workdir / "submissions.jsonl")
         self.state_path = self.workdir / "state.json"
+        self.elite_archive_path = self.workdir.parent / ".alpha_agent_elite_archive.json"
         self.agent_runs_dir = self.workdir / "agent_runs"
         self.agent_runs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -72,10 +73,45 @@ class ResearchToolbox:
         self.submissions: List[Dict[str, Any]] = []
         self.evaluated_signatures: set[str] = set()
         self.submitted_alpha_ids: set[str] = set()
+        self.atom_scores: Dict[str, float] = {}
+        self.family_scores: Dict[str, float] = {}
+        self.archive_records: List[Dict[str, Any]] = []
+        self.archive_signatures: set[str] = set()
         self.seed_queue: List[pipeline.Candidate] = []
         self.all_ordered_seeds: List[pipeline.Candidate] = []
+        self._load_elite_archive()
         self.refresh_records()
         self.refresh_seed_queue()
+
+    def _load_elite_archive(self) -> None:
+        if not self.elite_archive_path.exists():
+            return
+        try:
+            payload = json.loads(self.elite_archive_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return
+        if not isinstance(payload, dict):
+            return
+        self.atom_scores = {
+            str(key): max(0.0, min(1.0, float(value)))
+            for key, value in (payload.get("atom_scores") or {}).items()
+            if isinstance(key, str)
+        }
+        self.family_scores = {
+            str(key): max(0.0, min(1.0, float(value)))
+            for key, value in (payload.get("family_scores") or {}).items()
+            if isinstance(key, str)
+        }
+        self.archive_records = [
+            dict(record)
+            for record in (payload.get("elite") or [])
+            if isinstance(record, dict)
+        ]
+        self.archive_signatures = {
+            signature
+            for signature in (pipeline.record_signature(record) for record in self.archive_records)
+            if signature
+        }
 
     def _build_client(self) -> BrainClient:
         auth = self.runtime.auth
@@ -106,10 +142,88 @@ class ResearchToolbox:
             for signature in (pipeline.record_signature(record) for record in self.results)
             if signature
         }
+        self.evaluated_signatures.update(self.archive_signatures)
         self.submitted_alpha_ids = {
             str(record.get("alpha_id"))
             for record in self.submissions
             if isinstance(record.get("alpha_id"), str)
+        }
+        self._rebuild_learning_memory()
+
+    def _rebuild_learning_memory(self) -> None:
+        """Learn atom/family priors from completed WQ simulations."""
+        atom_values: Dict[str, List[float]] = {}
+        family_values: Dict[str, List[float]] = {}
+        for record in self.results:
+            if record.get("status") != "ok":
+                continue
+            quality = max(0.0, min(1.0, float(pipeline.pareto_score(record)) / 1000.0))
+            metadata = record.get("metadata") or {}
+            signatures = metadata.get("source_atom_signatures") or []
+            for signature in signatures:
+                if isinstance(signature, str) and signature:
+                    atom_values.setdefault(signature, []).append(quality)
+            family = record.get("family")
+            if isinstance(family, str) and family:
+                family_values.setdefault(family, []).append(quality)
+
+        current_atom_scores = {
+            signature: sum(values) / len(values)
+            for signature, values in atom_values.items()
+            if values
+        }
+        current_family_scores = {
+            family: sum(values) / len(values)
+            for family, values in family_values.items()
+            if values
+        }
+        self.atom_scores = {
+            signature: round(
+                0.75 * value + 0.25 * self.atom_scores.get(signature, value),
+                6,
+            )
+            for signature, value in current_atom_scores.items()
+        } | {
+            signature: value
+            for signature, value in self.atom_scores.items()
+            if signature not in current_atom_scores
+        }
+        self.family_scores = {
+            family: round(
+                0.75 * value + 0.25 * self.family_scores.get(family, value),
+                6,
+            )
+            for family, value in current_family_scores.items()
+        } | {
+            family: value
+            for family, value in self.family_scores.items()
+            if family not in current_family_scores
+        }
+        elite = sorted(
+            [
+                record
+                for record in self.results + self.archive_records
+                if record.get("status") == "ok"
+            ],
+            key=lambda record: float(record.get("pareto_score") or pipeline.pareto_score(record)),
+            reverse=True,
+        )[: max(1, int(self.agent_cfg.elite_archive_size))]
+        payload = {
+            "updated_at": pipeline.iso_now(),
+            "record_count": len(self.results),
+            "atom_scores": self.atom_scores,
+            "family_scores": self.family_scores,
+            "elite": elite,
+        }
+        self.elite_archive_path.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        self.archive_records = elite
+        self.archive_signatures = {
+            signature
+            for signature in (pipeline.record_signature(record) for record in elite)
+            if signature
         }
 
     def refresh_seed_queue(self) -> int:
@@ -124,6 +238,8 @@ class ResearchToolbox:
             factor_pool_max_triples=self.agent_cfg.factor_pool_max_triples,
             factor_pool_max_atom_reuse=self.agent_cfg.factor_pool_max_atom_reuse,
             factor_pool_social_buzz_share=self.agent_cfg.factor_pool_social_buzz_share,
+            atom_scores=self.atom_scores,
+            learned_atom_sampling=self.agent_cfg.learned_atom_sampling,
             random_seed=self.agent_cfg.random_seed,
         )
         if self.agent_cfg.force_diversify_on_correlation and pivot_families:
@@ -208,6 +324,16 @@ class ResearchToolbox:
         frontier_records: Sequence[Dict[str, Any]],
     ) -> Tuple[List[pipeline.Candidate], set[str], List[Dict[str, Any]]]:
         top_records = list(frontier_records[: self.agent_cfg.refine_top_k])
+        current_keys = {
+            record.get("candidate_key")
+            for record in top_records
+            if record.get("candidate_key")
+        }
+        top_records.extend(
+            record
+            for record in self.archive_records[: self.agent_cfg.refine_top_k]
+            if record.get("candidate_key") not in current_keys
+        )
         blocked_families = pipeline.correlation_pivot_families(top_records)
         generic = pipeline.build_refinement_candidates(
             top_records,
@@ -223,13 +349,20 @@ class ResearchToolbox:
             family_filter=set(self.agent_cfg.family_filter),
             blocked_families=blocked_families,
         )
+        evolutionary = pipeline.build_evolutionary_candidates(
+            top_records,
+            family_filter=set(self.agent_cfg.family_filter),
+            blocked_families=blocked_families,
+            max_candidates=self.agent_cfg.evolutionary_candidates,
+            random_seed=self.agent_cfg.random_seed,
+        )
         correlation_blocked = bool(blocked_families) and any(
             pipeline.should_pivot_away_from_record(record) for record in top_records
         )
         if self.agent_cfg.force_diversify_on_correlation and correlation_blocked:
             merged = []
         else:
-            merged = dedupe_candidates(correlation_repairs + check_aware + generic)
+            merged = dedupe_candidates(correlation_repairs + evolutionary + check_aware + generic)
         fresh = [
             candidate
             for candidate in merged

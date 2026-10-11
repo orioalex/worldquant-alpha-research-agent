@@ -162,6 +162,24 @@ def add_run_args(parser: argparse.ArgumentParser) -> None:
         default=float(os.getenv("ALPHA_AGENT_FACTOR_POOL_SOCIAL_BUZZ_SHARE", "0.5")),
         help="Relative sampling quota for the social_buzz family.",
     )
+    parser.add_argument(
+        "--evolutionary-candidates",
+        type=int,
+        default=int(os.getenv("ALPHA_AGENT_EVOLUTIONARY_CANDIDATES", "32")),
+        help="Maximum crossover/mutation candidates added to each refinement round.",
+    )
+    parser.add_argument(
+        "--elite-archive-size",
+        type=int,
+        default=int(os.getenv("ALPHA_AGENT_ELITE_ARCHIVE_SIZE", "64")),
+        help="Number of frontier records retained in the persistent elite archive.",
+    )
+    parser.add_argument(
+        "--learned-atom-sampling",
+        type=float,
+        default=float(os.getenv("ALPHA_AGENT_LEARNED_ATOM_SAMPLING", "0.7")),
+        help="Blend between learned atom quality and random exploration.",
+    )
     parser.add_argument("--refine-top-k", type=int, default=int(os.getenv("ALPHA_AGENT_REFINE_TOP_K", "8")))
     parser.add_argument(
         "--robustness-top-k",
@@ -314,6 +332,9 @@ def build_runtime(args: argparse.Namespace, run_overrides: Optional[Dict[str, An
         factor_pool_max_triples=getattr(args, "factor_pool_max_triples", 240),
         factor_pool_max_atom_reuse=getattr(args, "factor_pool_max_atom_reuse", 3),
         factor_pool_social_buzz_share=getattr(args, "factor_pool_social_buzz_share", 0.5),
+        evolutionary_candidates=getattr(args, "evolutionary_candidates", 32),
+        elite_archive_size=getattr(args, "elite_archive_size", 64),
+        learned_atom_sampling=getattr(args, "learned_atom_sampling", 0.7),
         force_diversify_on_correlation=getattr(args, "force_diversify_on_correlation", False),
         shuffle_seeds=getattr(args, "shuffle_seeds", True),
         random_seed=getattr(args, "random_seed", 7),
